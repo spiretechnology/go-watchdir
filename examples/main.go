@@ -3,15 +3,18 @@ package main
 import (
 	"fmt"
 	"github.com/spiretechnology/watchdir"
+	"os"
+	"path/filepath"
 	"time"
 )
 
 func main() {
 
+	homedir, _ := os.UserHomeDir()
 	wd := watchdir.WatchDir{
-		Dir: "/Users/conner/Desktop",
+		Dir: filepath.Join(homedir, "Desktop"),
 		MaxDepth: 10,
-		PollTimeout: time.Second * 30,
+		PollTimeout: time.Second * 5,
 	}
 	chanStop := make(chan bool)
 	chanFiles, chanError := wd.Watch(chanStop)
@@ -20,12 +23,12 @@ func main() {
 		select {
 		case err := <-chanError:
 			fmt.Println("Error: ", err)
-		case file := <-chanFiles:
-			switch file.Operation {
+		case event := <-chanFiles:
+			switch event.Operation {
 			case watchdir.Add:
-				fmt.Println("Added file: ", file.File.Path)
+				fmt.Println("Added file: ", event.File.Path)
 			case watchdir.Remove:
-				fmt.Println("Removed file: ", file.File.Path)
+				fmt.Println("Removed file: ", event.File.Path, event.File.Info.Size())
 			}
 		}
 	}

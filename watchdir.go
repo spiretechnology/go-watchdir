@@ -10,8 +10,8 @@ import (
 // Op defines an operation that took place on the watch directory
 type Op uint8
 const (
-	Add Op = iota
-	Remove
+	Add Op = 1 << 0
+	Remove = 1 << 1
 )
 
 // Cacher handles caching of which files in a watch directory have been indexed already
@@ -64,6 +64,9 @@ type WatchDir struct {
 
 	// LoggingDisabled determines if non-fatal logs should be suppressed for this watch directory
 	LoggingDisabled bool
+
+	// Operations is a bitmask for the operations we're interested in
+	Operations Op
 }
 
 // Event represents a file event
