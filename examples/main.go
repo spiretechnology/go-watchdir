@@ -3,18 +3,27 @@ package main
 import (
 	"fmt"
 	"github.com/spiretechnology/watchdir"
+	"log"
 	"os"
-	"path/filepath"
 	"time"
 )
 
 func main() {
 
-	homedir, _ := os.UserHomeDir()
+	if len(os.Args) < 2 {
+		log.Fatalln("Please provide a watch directory argument")
+	}
+
+	dir := os.Args[1]
+
 	wd := watchdir.WatchDir{
-		Dir: filepath.Join(homedir, "Desktop"),
+		Dir: dir,
 		MaxDepth: 10,
 		PollTimeout: time.Second * 5,
+		//Buffering: true,
+		//BufferingSorter: func(a, b *watchdir.FoundFile) bool {
+		//	return a.Info.ModTime().After(b.Info.ModTime())
+		//},
 	}
 	chanStop := make(chan bool)
 	chanFiles, chanError := wd.Watch(chanStop)

@@ -1,1 +1,3 @@
-module "github.com/spiretechnology/watchdir"
+module github.com/spiretechnology/watchdir
+
+go 1.15
