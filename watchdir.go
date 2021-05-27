@@ -2,29 +2,9 @@ package watchdir
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 )
-
-// Op defines an operation that took place on the watch directory
-type Op uint8
-const (
-	Add Op = 1 << 0
-	Remove = 1 << 1
-)
-
-// Cacher handles caching of which files in a watch directory have been indexed already
-type Cacher interface {
-	// Found is called when a file has been found in the watch directory. It is up to the Found implementation
-	// to return true if the file is new, or false if the file has been indexed already. If an error is returned
-	// the file will be skipped, and the error will be logged.
-	Found(file *FoundFile) (bool, error)
-
-	// Cleanup performs final cleanup when the directory watcher is shut down. This gives the cacher an opportunity
-	// to save its work, or whatever else is needed.
-	Cleanup() error
-}
 
 // WatchDir represents a watch directory instance
 type WatchDir struct {
@@ -60,7 +40,7 @@ type WatchDir struct {
 	// BufferingSorter is an optional function which is used when Buffering is enabled to sort the buffered files
 	// prior to them being emitted on the channel at the end of each sweep. The sorter function should return true
 	// if the two provided found files are already in correct order already.
-	BufferingSorter func(*FoundFile, *FoundFile)bool
+	BufferingSorter func(*FoundFile, *FoundFile) bool
 
 	// LoggingDisabled determines if non-fatal logs should be suppressed for this watch directory
 	LoggingDisabled bool
@@ -72,17 +52,7 @@ type WatchDir struct {
 // Event represents a file event
 type Event struct {
 	Operation Op
-	File FoundFile
-}
-
-// FoundFile represents a file found within a watch directory
-type FoundFile struct {
-	// Dir is the root directory being watched
-	Dir string
-	// Path is the absolute path to the found file
-	Path string
-	// Info is the stat info about the file
-	Info os.FileInfo
+	File      FoundFile
 }
 
 // indexedFile represents a file that has been indexed already
@@ -115,11 +85,12 @@ func (wd *WatchDir) Watch(stop <-chan bool) (<-chan Event, <-chan error) {
 		indexedFiles := make(map[string]*indexedFile)
 
 		// Loop until we're told to stop
+	loop:
 		for sweepIndex := uint64(0); true; sweepIndex++ {
 			select {
 			case <-stop:
 				wd.cleanup()
-				break
+				break loop
 			default:
 				wd.performSweepIteration(
 					chanFiles,
@@ -168,9 +139,9 @@ func (wd *WatchDir) sweepCallback(newFileEvents *[]Event, chanFiles chan<- Event
 		}
 
 		// Create the event instance
-		fileEvent := Event {
+		fileEvent := Event{
 			Operation: Add,
-			File: *file,
+			File:      *file,
 		}
 
 		// Send the file over the channel, or add it to the buffer
@@ -240,9 +211,9 @@ func (wd *WatchDir) performSweepIteration(
 		if v.SweepIndex != sweepIndex {
 
 			// Create the removed event
-			removedEvent := Event {
+			removedEvent := Event{
 				Operation: Remove,
-				File: v.File,
+				File:      v.File,
 			}
 
 			// Send the event on the channel
@@ -270,7 +241,7 @@ func (wd *WatchDir) performSweepIteration(
 	}
 
 	// Calculate the remaining amount of time we need to sleep
-	sleepTime := wd.PollTimeout - time.Now().Sub(endTime)
+	sleepTime := wd.PollTimeout - time.Since(endTime)
 	if sleepTime > 0 {
 		time.Sleep(sleepTime)
 	}
@@ -322,9 +293,9 @@ func (wd *WatchDir) sweepRecursive(
 
 			// Add the file to the map
 			(*indexedFiles)[path] = &indexedFile{
-				Path: path,
+				Path:       path,
 				SweepIndex: sweepIndex,
-				File: *file,
+				File:       *file,
 			}
 
 			// We found the file!
@@ -358,7 +329,7 @@ func (wd *WatchDir) sweepRecursive(
 			// Sweep the child
 			wd.sweepRecursive(
 				filepath.Join(path, name),
-				depth + 1,
+				depth+1,
 				sweepIndex,
 				indexedFiles,
 				chanError,

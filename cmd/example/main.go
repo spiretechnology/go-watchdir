@@ -2,10 +2,11 @@ package main
 
 import (
 	"fmt"
-	"github.com/spiretechnology/watchdir"
 	"log"
 	"os"
 	"time"
+
+	"github.com/spiretechnology/watchdir"
 )
 
 func main() {
@@ -17,8 +18,8 @@ func main() {
 	dir := os.Args[1]
 
 	wd := watchdir.WatchDir{
-		Dir: dir,
-		MaxDepth: 10,
+		Dir:         dir,
+		MaxDepth:    10,
 		PollTimeout: time.Second * 5,
 		//Buffering: true,
 		//BufferingSorter: func(a, b *watchdir.FoundFile) bool {

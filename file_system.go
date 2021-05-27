@@ -15,7 +15,7 @@ type FileSystem interface {
 }
 
 // DefaultFileSystem is an implementation of FileSystem that uses the machine's native OS/runtime file system
-type DefaultFileSystem struct {}
+type DefaultFileSystem struct{}
 
 // ReadDir lists the files in a directory on the file system
 func (fs *DefaultFileSystem) ReadDir(dir string) ([]string, error) {
