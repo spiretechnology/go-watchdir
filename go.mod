@@ -1,3 +1,3 @@
-module github.com/spiretechnology/watchdir
+module github.com/spiretechnology/go-watchdir
 
 go 1.16

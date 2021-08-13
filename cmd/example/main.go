@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/spiretechnology/watchdir"
+	"github.com/spiretechnology/go-watchdir"
 )
 
 func main() {
