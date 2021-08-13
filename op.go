@@ -5,5 +5,5 @@ type Op uint8
 
 const (
 	Add    Op = 1 << 0
-	Remove    = 1 << 1
+	Remove Op = 1 << 1
 )
