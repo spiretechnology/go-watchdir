@@ -2,6 +2,12 @@
 
 A Go library for monitoring changes to files and folders.
 
+## Installation
+
+```sh
+go get github.com/spiretechnology/go-watchdir
+```
+
 ## Example Usage
 
 ```go
