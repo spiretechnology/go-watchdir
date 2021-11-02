@@ -18,24 +18,30 @@ wd := watchdir.WatchDir{
     PollTimeout: time.Second * 5,
 }
 
-// Make a stop channel so we can end the watch dir
-chanStop := make(chan bool)
+// Create a context that is cancelled on SIGINT/SIGTERM (Ctrl+C)
+ctx := context.Background()
+ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+defer cancel()
 
-// Start watching the directory. Returns a channel for reading file events,
-// and another channel for reading error messages
-chanFiles, chanError := wd.Watch(chanStop)
+// Channel that will receive all the watch directory events
+chanFiles := make(chan watchdir.Event)
 
-for {
-    select {
-    case err := <-chanError:
-        fmt.Println("Error: ", err)
-    case event := <-chanFiles:
-        switch event.Operation {
-        case watchdir.Add:
-            fmt.Println("Added file: ", event.File.Path)
-        case watchdir.Remove:
-            fmt.Println("Removed file: ", event.File.Path)
-        }
+// In the background, watch for file changes
+go func() {
+    err := wd.Watch(ctx, chanFiles)
+    if err != nil && err != context.Canceled {
+        panic(err)
+    }
+    close(chanFiles)
+}()
+
+// In the foreground, handle all the file events
+for event := range chanFiles {
+    switch event.Operation {
+    case watchdir.Add:
+        fmt.Println("Added file: ", event.File.Path)
+    case watchdir.Remove:
+        fmt.Println("Removed file: ", event.File.Path, event.File.Info.Size())
     }
 }
 ```

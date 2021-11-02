@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/spiretechnology/go-watchdir"
@@ -26,20 +29,31 @@ func main() {
 		//	return a.Info.ModTime().After(b.Info.ModTime())
 		//},
 	}
-	chanStop := make(chan bool)
-	chanFiles, chanError := wd.Watch(chanStop)
 
-	for {
-		select {
-		case err := <-chanError:
-			fmt.Println("Error: ", err)
-		case event := <-chanFiles:
-			switch event.Operation {
-			case watchdir.Add:
-				fmt.Println("Added file: ", event.File.Path)
-			case watchdir.Remove:
-				fmt.Println("Removed file: ", event.File.Path, event.File.Info.Size())
-			}
+	// Create a context that is cancelled on SIGINT/SIGTERM (Ctrl+C)
+	ctx := context.Background()
+	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	// Channel that will receive all the watch directory events
+	chanFiles := make(chan watchdir.Event)
+
+	// In the background, watch for file changes
+	go func() {
+		err := wd.Watch(ctx, chanFiles)
+		if err != nil && err != context.Canceled {
+			panic(err)
+		}
+		close(chanFiles)
+	}()
+
+	// In the foreground, handle all the file events
+	for event := range chanFiles {
+		switch event.Operation {
+		case watchdir.Add:
+			fmt.Println("Added file: ", event.File.Path)
+		case watchdir.Remove:
+			fmt.Println("Removed file: ", event.File.Path, event.File.Info.Size())
 		}
 	}
 

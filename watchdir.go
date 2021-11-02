@@ -1,6 +1,7 @@
 package watchdir
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -67,43 +68,41 @@ type indexedFile struct {
 }
 
 // Watch begins scanning the watch directory
-func (wd *WatchDir) Watch(stop <-chan bool) (<-chan Event, <-chan error) {
+func (wd *WatchDir) Watch(
+	ctx context.Context,
+	eventChan chan<- Event,
+) error {
 
 	// If there is no file system, get one
 	if wd.Fs == nil {
 		wd.Fs = &DefaultFileSystem{}
 	}
 
-	// Create the output channel for the files and error
-	chanFiles := make(chan Event)
-	chanError := make(chan error)
+	// Keep track of all the files we've already seen
+	indexedFiles := make(map[string]*indexedFile)
 
-	// Call the goroutine
-	go func() {
+	// Defer the cleanup function
+	defer wd.cleanup()
 
-		// Keep track of all the files we've already seen
-		indexedFiles := make(map[string]*indexedFile)
-
-		// Loop until we're told to stop
-	loop:
-		for sweepIndex := uint64(0); true; sweepIndex++ {
-			select {
-			case <-stop:
-				wd.cleanup()
-				break loop
-			default:
-				wd.performSweepIteration(
-					chanFiles,
-					chanError,
-					sweepIndex,
-					&indexedFiles,
-				)
+	// Loop until we're told to stop
+	for sweepIndex := uint64(0); true; sweepIndex++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			if err := wd.performSweepIteration(
+				ctx,
+				eventChan,
+				sweepIndex,
+				indexedFiles,
+			); err != nil {
+				return err
 			}
 		}
-	}()
+	}
 
-	// Return the channels
-	return chanFiles, chanError
+	// Return without error
+	return nil
 
 }
 
@@ -185,29 +184,32 @@ func (wd *WatchDir) insertFileToBuffer(fileEvent Event, newFileEvents []Event) [
 
 // performSweepIteration performs one iteration of the directory sweeper
 func (wd *WatchDir) performSweepIteration(
+	ctx context.Context,
 	chanFiles chan<- Event,
-	chanError chan<- error,
 	sweepIndex uint64,
-	indexedFiles *map[string]*indexedFile) {
+	indexedFiles map[string]*indexedFile,
+) error {
 
 	// Create the slice of new files
 	var newFileEvents []Event
 
 	// Sweep the entire directory recursively
-	wd.sweepRecursive(
+	if err := wd.sweepRecursive(
+		ctx,
 		wd.Dir,
 		0,
 		sweepIndex,
 		indexedFiles,
-		chanError,
 		wd.sweepCallback(&newFileEvents, chanFiles),
-	)
+	); err != nil {
+		return err
+	}
 
 	// The list of removed file keys
 	var removedKeys []string
 
 	// Look for all of the removed files
-	for k, v := range *indexedFiles {
+	for k, v := range indexedFiles {
 		if v.SweepIndex != sweepIndex {
 
 			// Create the removed event
@@ -227,7 +229,7 @@ func (wd *WatchDir) performSweepIteration(
 
 	// Remove all of the keys
 	for _, k := range removedKeys {
-		delete(*indexedFiles, k)
+		delete(indexedFiles, k)
 	}
 
 	// Grab the timestamp when the sweep ends
@@ -236,34 +238,44 @@ func (wd *WatchDir) performSweepIteration(
 	// If we were buffering, flush the buffer to the channel
 	if wd.Buffering {
 		for _, e := range newFileEvents {
-			chanFiles <- e
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case chanFiles <- e:
+			}
 		}
 	}
 
 	// Calculate the remaining amount of time we need to sleep
 	sleepTime := wd.PollTimeout - time.Since(endTime)
 	if sleepTime > 0 {
-		time.Sleep(sleepTime)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(sleepTime):
+		}
 	}
+
+	// Return without error
+	return nil
 
 }
 
 func (wd *WatchDir) sweepRecursive(
+	ctx context.Context,
 	path string,
 	depth uint8,
 	sweepIndex uint64,
-	indexedFiles *map[string]*indexedFile,
-	chanError chan<- error,
-	foundFile func(*FoundFile)) {
+	indexedFiles map[string]*indexedFile,
+	foundFile func(*FoundFile),
+) error {
 
 	// Get the stats about the path
 	info, err := wd.Fs.Stat(path)
 	if err != nil {
 		// This error can actually be ignored, as it usually means a file was just recently moved,
 		// as opposed to anything more concerning.
-		//chanError <- err
-		//wd.log("error getting file info: ", err)
-		return
+		return nil
 	}
 
 	// If the path is a file
@@ -275,24 +287,22 @@ func (wd *WatchDir) sweepRecursive(
 			filepath.Base(path),
 		)
 		if err != nil {
-			wd.log("watch directory error: ", err)
-			chanError <- err
-			return
+			return err
 		}
 
 		// If the modified time is too recent, return for now. We'll index it again on the next sweep
 		if file.Info.ModTime().Add(time.Millisecond * wd.WriteStabilityThreshold).After(time.Now()) {
-			return
+			return nil
 		}
 
 		// Get the existing entry for the file
-		existingEntry, alreadyIndexed := (*indexedFiles)[path]
+		existingEntry, alreadyIndexed := indexedFiles[path]
 
 		// If the value is not in the map, or the value is out of date
 		if !alreadyIndexed {
 
 			// Add the file to the map
-			(*indexedFiles)[path] = &indexedFile{
+			indexedFiles[path] = &indexedFile{
 				Path:       path,
 				SweepIndex: sweepIndex,
 				File:       *file,
@@ -312,33 +322,37 @@ func (wd *WatchDir) sweepRecursive(
 
 		// If we're already too deep
 		if depth >= wd.MaxDepth {
-			return
+			return nil
 		}
 
 		// List all of the files
 		list, err := wd.Fs.ReadDir(path)
 		if err != nil {
 			wd.log("error sweeping directory: ", err)
-			chanError <- err
-			return
+			return err
 		}
 
 		// Loop through the files list
 		for _, name := range list {
 
 			// Sweep the child
-			wd.sweepRecursive(
+			if err := wd.sweepRecursive(
+				ctx,
 				filepath.Join(path, name),
 				depth+1,
 				sweepIndex,
 				indexedFiles,
-				chanError,
 				foundFile,
-			)
+			); err != nil {
+				return err
+			}
 
 		}
 
 	}
+
+	// Return without error
+	return nil
 
 }
 
