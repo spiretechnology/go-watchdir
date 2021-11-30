@@ -19,19 +19,15 @@ type DefaultFileSystem struct{}
 
 // ReadDir lists the files in a directory on the file system
 func (fs *DefaultFileSystem) ReadDir(dir string) ([]string, error) {
-	file, err := os.Open(dir)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
-	list, err := file.Readdirnames(-1)
-	if err != nil {
-		return nil, err
+	names := make([]string, len(entries))
+	for i := range entries {
+		names[i] = entries[i].Name()
 	}
-	err = file.Close()
-	if err != nil {
-		return nil, err
-	}
-	return list, nil
+	return names, nil
 }
 
 // Stat returns the file info for the file at the given path
