@@ -2,9 +2,19 @@ package watchdir
 
 import (
 	"context"
+	"io/fs"
 	"log"
+	"os"
 	"path/filepath"
 	"time"
+)
+
+type LogLevel uint8
+
+const (
+	INFO  = LogLevel(1 << 0)
+	WARN  = LogLevel(1 << 1)
+	ERROR = LogLevel(1 << 2)
 )
 
 // WatchDir represents a watch directory instance
@@ -13,7 +23,7 @@ type WatchDir struct {
 	// Fs is an optional file system implementation to use instead of the OS runtime file system. If implemented
 	// and provided here, it enables some interesting things, such as watch directories over the network, or
 	// for in-memory file systems.
-	Fs FileSystem
+	FS fs.FS
 
 	// Dir the directory to watch, relative to the root of the file system
 	Dir string
@@ -34,8 +44,12 @@ type WatchDir struct {
 	// indexed. This ensures files aren't indexed until they are fully finished writing to the file system
 	WriteStabilityThreshold time.Duration
 
-	// LoggingDisabled determines if non-fatal logs should be suppressed for this watch directory
-	LoggingDisabled bool
+	// Logger is the logger to print to
+	Logger *log.Logger
+
+	// LogLevel is the level of logging to actuall print to the logger. The default is WARN, which means
+	// logs of type WARN or ERROR will be printed to the logger
+	LogLevel LogLevel
 
 	// Operations is a bitmask for the operations we're interested in
 	Operations Op
@@ -64,9 +78,9 @@ func (wd *WatchDir) Watch(
 	eventChan chan<- Event,
 ) error {
 
-	// If there is no file system, get one
-	if wd.Fs == nil {
-		wd.Fs = &DefaultFileSystem{}
+	// If there is no file system, use the default
+	if wd.FS == nil {
+		wd.FS = os.DirFS("")
 	}
 
 	// Keep track of all the files we've already seen
@@ -100,7 +114,7 @@ func (wd *WatchDir) Watch(
 // createFoundFile creates a found file instance from the directory and filename
 func (wd *WatchDir) createFoundFile(dir, name string) (*FoundFile, error) {
 	fullPath := filepath.Join(dir, name)
-	info, err := wd.Fs.Stat(fullPath)
+	info, err := fs.Stat(wd.FS, fullPath)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +134,7 @@ func (wd *WatchDir) sweepCallback(newFileEvents *[]Event, chanFiles chan<- Event
 		if wd.Caching != nil {
 			isNew, err := wd.Caching.Found(file)
 			if err != nil {
-				wd.log("watch directory caching error: ", err)
+				wd.log(ERROR, "watch directory caching error: ", err)
 				return
 			}
 			if !isNew {
@@ -218,9 +232,9 @@ func (wd *WatchDir) sweepRecursive(
 ) error {
 
 	// Get the stats about the path
-	info, err := wd.Fs.Stat(path)
+	info, err := fs.Stat(wd.FS, path)
 	if err != nil {
-		wd.log("warning stat %q ")
+		wd.logf(WARN, "warning stat %q: %s", path, err)
 		// This error can actually be ignored, as it usually means a file was just recently moved,
 		// as opposed to anything more concerning.
 		return nil
@@ -274,25 +288,26 @@ func (wd *WatchDir) sweepRecursive(
 		}
 
 		// List all of the files
-		list, err := wd.Fs.ReadDir(path)
+		entries, err := fs.ReadDir(wd.FS, path)
 		if err != nil {
-			wd.log("error sweeping directory: ", err)
+			wd.log(ERROR, "error sweeping directory: ", err)
 			return err
 		}
 
 		// Loop through the files list
-		for _, name := range list {
+		for _, entry := range entries {
 
 			// Sweep the child
 			if err := wd.sweepRecursive(
 				ctx,
-				filepath.Join(path, name),
+				filepath.Join(path, entry.Name()),
 				depth+1,
 				sweepIndex,
 				indexedFiles,
 				foundFile,
 			); err != nil {
-				return err
+				wd.log(WARN, "error sweeping subdir: ", err)
+				// Don't return here, because we don't want to prevent sibling directories from being swept (the loop)
 			}
 
 		}
@@ -311,16 +326,8 @@ func (wd *WatchDir) cleanup() {
 	if wd.Caching != nil {
 		err := wd.Caching.Cleanup()
 		if err != nil {
-			wd.log("cacher cleanup error: ", err)
+			wd.log(ERROR, "cacher cleanup error: ", err)
 		}
 	}
 
-}
-
-// log prints non-fatal logs to the console if logging is not disabled
-func (wd *WatchDir) log(args ...interface{}) {
-	if wd.LoggingDisabled {
-		return
-	}
-	log.Println(args...)
 }
