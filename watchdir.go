@@ -231,6 +231,14 @@ func (wd *WatchDir) sweepRecursive(
 	foundFile func(*FoundFile),
 ) error {
 
+	// Breakout if the context is cancelled. This is placed here because this function is
+	// recursive so it doesn't matter where we put this check.
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	// Get the stats about the path
 	info, err := fs.Stat(wd.FS, path)
 	if err != nil {

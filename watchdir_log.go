@@ -32,5 +32,5 @@ func (wd *WatchDir) log(level LogLevel, args ...interface{}) {
 
 // logf prints a log with a format string and args
 func (wd *WatchDir) logf(level LogLevel, format string, args ...interface{}) {
-	wd.logf(level, fmt.Sprintf(format, args...))
+	wd.log(level, fmt.Sprintf(format, args...))
 }
