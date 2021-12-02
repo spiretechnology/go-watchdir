@@ -2,7 +2,7 @@ package watchdir
 
 import (
 	"context"
-	"fmt"
+	"log"
 	"path/filepath"
 	"time"
 )
@@ -33,15 +33,6 @@ type WatchDir struct {
 	// WriteStabilityThreshold is the number of milliseconds a file's size must remain the same before it is
 	// indexed. This ensures files aren't indexed until they are fully finished writing to the file system
 	WriteStabilityThreshold time.Duration
-
-	// Buffering determines whether or not per-sweep buffering is used. This will cause all found files to be
-	// emitted on the channel at the end of each sweep, instead of throughout the sweep. This is off by default.
-	Buffering bool
-
-	// BufferingSorter is an optional function which is used when Buffering is enabled to sort the buffered files
-	// prior to them being emitted on the channel at the end of each sweep. The sorter function should return true
-	// if the two provided found files are already in correct order already.
-	BufferingSorter func(*FoundFile, *FoundFile) bool
 
 	// LoggingDisabled determines if non-fatal logs should be suppressed for this watch directory
 	LoggingDisabled bool
@@ -143,43 +134,10 @@ func (wd *WatchDir) sweepCallback(newFileEvents *[]Event, chanFiles chan<- Event
 			File:      *file,
 		}
 
-		// Send the file over the channel, or add it to the buffer
-		if wd.Buffering {
-			*newFileEvents = wd.insertFileToBuffer(fileEvent, *newFileEvents)
-		} else {
-			chanFiles <- fileEvent
-		}
+		// Send the file over the channel
+		chanFiles <- fileEvent
 
 	}
-}
-
-// insertFileToBuffer inserts a found file into the buffer, if buffering is turned on
-func (wd *WatchDir) insertFileToBuffer(fileEvent Event, newFileEvents []Event) []Event {
-
-	// If there is a sort function
-	if wd.BufferingSorter != nil {
-
-		// Loop through the indices in the sorter
-		insertIndex := len(newFileEvents)
-		for i, f := range newFileEvents {
-			// If they're not in the correct order like this, then we need to insert the file
-			// immediately before f
-			if !wd.BufferingSorter(&f.File, &fileEvent.File) {
-				insertIndex = i
-				break
-			}
-		}
-
-		// Insert the file in order
-		return append(newFileEvents[0:insertIndex], append([]Event{fileEvent}, newFileEvents[insertIndex:]...)...)
-
-	} else {
-
-		// Simply append the file to the list
-		return append(newFileEvents, fileEvent)
-
-	}
-
 }
 
 // performSweepIteration performs one iteration of the directory sweeper
@@ -235,17 +193,6 @@ func (wd *WatchDir) performSweepIteration(
 	// Grab the timestamp when the sweep ends
 	endTime := time.Now()
 
-	// If we were buffering, flush the buffer to the channel
-	if wd.Buffering {
-		for _, e := range newFileEvents {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case chanFiles <- e:
-			}
-		}
-	}
-
 	// Calculate the remaining amount of time we need to sleep
 	sleepTime := wd.PollTimeout - time.Since(endTime)
 	if sleepTime > 0 {
@@ -273,6 +220,7 @@ func (wd *WatchDir) sweepRecursive(
 	// Get the stats about the path
 	info, err := wd.Fs.Stat(path)
 	if err != nil {
+		wd.log("warning stat %q ")
 		// This error can actually be ignored, as it usually means a file was just recently moved,
 		// as opposed to anything more concerning.
 		return nil
@@ -374,5 +322,5 @@ func (wd *WatchDir) log(args ...interface{}) {
 	if wd.LoggingDisabled {
 		return
 	}
-	fmt.Println(args...)
+	log.Println(args...)
 }

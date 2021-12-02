@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -24,10 +23,6 @@ func main() {
 		Dir:         dir,
 		MaxDepth:    10,
 		PollTimeout: time.Second * 5,
-		//Buffering: true,
-		//BufferingSorter: func(a, b *watchdir.FoundFile) bool {
-		//	return a.Info.ModTime().After(b.Info.ModTime())
-		//},
 	}
 
 	// Create a context that is cancelled on SIGINT/SIGTERM (Ctrl+C)
@@ -51,9 +46,9 @@ func main() {
 	for event := range chanFiles {
 		switch event.Operation {
 		case watchdir.Add:
-			fmt.Println("Added file: ", event.File.Path)
+			log.Printf("[+] %s\n", event.File.Path)
 		case watchdir.Remove:
-			fmt.Println("Removed file: ", event.File.Path, event.File.Info.Size())
+			log.Printf("[-]: %s\n", event.File.Path)
 		}
 	}
 
