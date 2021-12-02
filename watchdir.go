@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io/fs"
 	"log"
+	"path"
 	"path/filepath"
 	"time"
 )
@@ -129,14 +130,13 @@ func (wd *WatchDir) Watch(
 }
 
 // createFoundFile creates a found file instance from the directory and filename
-func (wd *WatchDir) createFoundFile(dir, name string) (*FoundFile, error) {
-	fullPath := filepath.Join(dir, name)
-	info, err := fs.Stat(wd.FS, fullPath)
+func (wd *WatchDir) createFoundFile(pathParts []string) (*FoundFile, error) {
+	info, err := fs.Stat(wd.FS, path.Join(pathParts...))
 	if err != nil {
 		return nil, err
 	}
 	file := &FoundFile{
-		Path: fullPath,
+		Path: filepath.Join(pathParts...),
 		Info: info,
 	}
 	return file, nil
@@ -184,7 +184,7 @@ func (wd *WatchDir) performSweepIteration(
 	// Sweep the entire directory recursively
 	if err := wd.sweepRecursive(
 		ctx,
-		".",
+		[]string{"."},
 		0,
 		sweepIndex,
 		indexedFiles,
@@ -240,7 +240,7 @@ func (wd *WatchDir) performSweepIteration(
 
 func (wd *WatchDir) sweepRecursive(
 	ctx context.Context,
-	path string,
+	pathParts []string,
 	depth uint8,
 	sweepIndex uint64,
 	indexedFiles map[string]*indexedFile,
@@ -255,10 +255,13 @@ func (wd *WatchDir) sweepRecursive(
 	default:
 	}
 
+	// Create the relative path from parts
+	relPath := path.Join(pathParts...)
+
 	// Get the stats about the path
-	info, err := fs.Stat(wd.FS, path)
+	info, err := fs.Stat(wd.FS, relPath)
 	if err != nil {
-		wd.logf(WARN, "warning stat %q: %s", path, err)
+		wd.logf(WARN, "warning stat %q: %s", relPath, err)
 		// This error can actually be ignored, as it usually means a file was just recently moved,
 		// as opposed to anything more concerning.
 		return nil
@@ -268,10 +271,7 @@ func (wd *WatchDir) sweepRecursive(
 	if !info.IsDir() {
 
 		// Create the found file instance
-		file, err := wd.createFoundFile(
-			filepath.Dir(path),
-			filepath.Base(path),
-		)
+		file, err := wd.createFoundFile(pathParts)
 		if err != nil {
 			return err
 		}
@@ -282,14 +282,14 @@ func (wd *WatchDir) sweepRecursive(
 		}
 
 		// Get the existing entry for the file
-		existingEntry, alreadyIndexed := indexedFiles[path]
+		existingEntry, alreadyIndexed := indexedFiles[relPath]
 
 		// If the value is not in the map, or the value is out of date
 		if !alreadyIndexed {
 
 			// Add the file to the map
-			indexedFiles[path] = &indexedFile{
-				Path:       path,
+			indexedFiles[relPath] = &indexedFile{
+				Path:       relPath,
 				SweepIndex: sweepIndex,
 				File:       *file,
 			}
@@ -308,12 +308,12 @@ func (wd *WatchDir) sweepRecursive(
 
 		// If we're already too deep
 		if depth >= wd.MaxDepth {
-			wd.logf(WARN, "hit max depth (%d): %s", wd.MaxDepth, path)
+			wd.logf(WARN, "hit max depth (%d): %s", wd.MaxDepth, relPath)
 			return nil
 		}
 
 		// List all of the files
-		entries, err := fs.ReadDir(wd.FS, path)
+		entries, err := fs.ReadDir(wd.FS, relPath)
 		if err != nil {
 			wd.log(ERROR, "error sweeping directory: ", err)
 			return err
@@ -322,15 +322,26 @@ func (wd *WatchDir) sweepRecursive(
 		// Loop through the files list
 		for _, entry := range entries {
 
+			// Create the path slice for the next step down
+			var subPath []string
+			subPath = append(subPath, pathParts...)
+			subPath = append(subPath, entry.Name())
+
 			// Sweep the child
 			if err := wd.sweepRecursive(
 				ctx,
-				filepath.Join(path, entry.Name()),
+				subPath,
 				depth+1,
 				sweepIndex,
 				indexedFiles,
 				foundFile,
 			); err != nil {
+
+				// If the error is context cancelled
+				if errors.Is(err, context.Canceled) {
+					return err
+				}
+
 				wd.log(WARN, "error sweeping subdir: ", err)
 				// Don't return here, because we don't want to prevent sibling directories from being swept (the loop)
 			}
