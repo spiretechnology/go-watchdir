@@ -112,8 +112,16 @@ func (wd *WatchDir) Watch(
 			sweepIndex,
 			indexedFiles,
 		); err != nil {
+
+			// If the context was cancelled, return that error
+			if errors.Is(err, context.Canceled) {
+				return err
+			}
+
+			// Other errors should not cause the watch process to end, so we just
+			// log them and continue
 			wd.logf(ERROR, "error sweeping: %s", err)
-			// return err
+
 		}
 
 	}
