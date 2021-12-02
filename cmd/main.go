@@ -20,7 +20,7 @@ func main() {
 	dir := os.Args[1]
 
 	wd := watchdir.WatchDir{
-		Dir:         dir,
+		FS:          os.DirFS(dir),
 		MaxDepth:    10,
 		PollTimeout: time.Second * 5,
 	}

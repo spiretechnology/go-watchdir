@@ -2,9 +2,9 @@ package watchdir
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"log"
-	"os"
 	"path/filepath"
 	"time"
 )
@@ -24,9 +24,6 @@ type WatchDir struct {
 	// and provided here, it enables some interesting things, such as watch directories over the network, or
 	// for in-memory file systems.
 	FS fs.FS
-
-	// Dir the directory to watch, relative to the root of the file system
-	Dir string
 
 	// Caching is an optional caching service which can be attached to the watch directory. It can be used to
 	// prevent the re-indexing of files across multiple sessions, and over time.
@@ -80,7 +77,7 @@ func (wd *WatchDir) Watch(
 
 	// If there is no file system, use the default
 	if wd.FS == nil {
-		wd.FS = os.DirFS("")
+		return errors.New("cannot watch nil file system, consider os.DirFS(...)")
 	}
 
 	// Keep track of all the files we've already seen
@@ -119,7 +116,6 @@ func (wd *WatchDir) createFoundFile(dir, name string) (*FoundFile, error) {
 		return nil, err
 	}
 	file := &FoundFile{
-		Dir:  wd.Dir,
 		Path: fullPath,
 		Info: info,
 	}
@@ -168,7 +164,7 @@ func (wd *WatchDir) performSweepIteration(
 	// Sweep the entire directory recursively
 	if err := wd.sweepRecursive(
 		ctx,
-		wd.Dir,
+		".",
 		0,
 		sweepIndex,
 		indexedFiles,
