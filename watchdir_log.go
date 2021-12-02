@@ -5,6 +5,14 @@ import (
 	"log"
 )
 
+type LogLevel uint8
+
+const (
+	INFO  = LogLevel(1 << 0)
+	WARN  = LogLevel(1 << 1)
+	ERROR = LogLevel(1 << 2)
+)
+
 // log prints a log to the logger
 func (wd *WatchDir) log(level LogLevel, args ...interface{}) {
 

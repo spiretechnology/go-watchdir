@@ -20,9 +20,8 @@ func main() {
 	dir := os.Args[1]
 
 	wd := watchdir.WatchDir{
-		FS:          os.DirFS(dir),
-		MaxDepth:    10,
-		PollTimeout: time.Second * 5,
+		FS:                      os.DirFS(dir),
+		WriteStabilityThreshold: time.Second * 10,
 	}
 
 	// Create a context that is cancelled on SIGINT/SIGTERM (Ctrl+C)

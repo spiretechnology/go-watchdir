@@ -9,13 +9,11 @@ import (
 	"time"
 )
 
-type LogLevel uint8
+// DefaultMaxDepth is the default maximum depth to sweep to, if nothing else is specified
+const DefaultMaxDepth = 10
 
-const (
-	INFO  = LogLevel(1 << 0)
-	WARN  = LogLevel(1 << 1)
-	ERROR = LogLevel(1 << 2)
-)
+// DefaultPollTimeout is the default timeout between polling interations, if nothing else is specified
+const DefaultPollTimeout = 15 * time.Second
 
 // WatchDir represents a watch directory instance
 type WatchDir struct {
@@ -41,7 +39,7 @@ type WatchDir struct {
 	// indexed. This ensures files aren't indexed until they are fully finished writing to the file system
 	WriteStabilityThreshold time.Duration
 
-	// Logger is the logger to print to
+	// Logger is the logger to print to. Defaults to using the default logger
 	Logger *log.Logger
 
 	// LogLevel is the level of logging to actuall print to the logger. The default is WARN, which means
@@ -77,6 +75,16 @@ func (wd *WatchDir) Watch(
 		return errors.New("cannot watch nil file system, consider os.DirFS(...)")
 	}
 
+	// Fallback to the default MaxDepth
+	if wd.MaxDepth <= 0 {
+		wd.MaxDepth = DefaultMaxDepth
+	}
+
+	// Fallback to the default polling timeout
+	if wd.PollTimeout == 0 {
+		wd.PollTimeout = DefaultPollTimeout
+	}
+
 	// Keep track of all the files we've already seen
 	indexedFiles := make(map[string]*indexedFile)
 
@@ -84,24 +92,31 @@ func (wd *WatchDir) Watch(
 	defer wd.cleanup()
 
 	// Loop until we're told to stop
-	for sweepIndex := uint64(0); true; sweepIndex++ {
+	var sweepIndex uint64
+	for {
+
+		// Increment the sweep index. It's used to track the last sweep that a file was seen
+		sweepIndex++
+
+		// Allow context breakout here
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
-			if err := wd.performSweepIteration(
-				ctx,
-				eventChan,
-				sweepIndex,
-				indexedFiles,
-			); err != nil {
-				return err
-			}
 		}
-	}
 
-	// Return without error
-	return nil
+		// Perform the sweep iteration
+		if err := wd.performSweepIteration(
+			ctx,
+			eventChan,
+			sweepIndex,
+			indexedFiles,
+		); err != nil {
+			wd.logf(ERROR, "error sweeping: %s", err)
+			// return err
+		}
+
+	}
 
 }
 
@@ -254,7 +269,7 @@ func (wd *WatchDir) sweepRecursive(
 		}
 
 		// If the modified time is too recent, return for now. We'll index it again on the next sweep
-		if file.Info.ModTime().Add(time.Millisecond * wd.WriteStabilityThreshold).After(time.Now()) {
+		if file.Info.ModTime().Add(wd.WriteStabilityThreshold).After(time.Now()) {
 			return nil
 		}
 
@@ -285,6 +300,7 @@ func (wd *WatchDir) sweepRecursive(
 
 		// If we're already too deep
 		if depth >= wd.MaxDepth {
+			wd.logf(WARN, "hit max depth (%d): %s", wd.MaxDepth, path)
 			return nil
 		}
 
