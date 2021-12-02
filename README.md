@@ -13,7 +13,7 @@ go get github.com/spiretechnology/go-watchdir
 ```go
 // Create a watch directory
 wd := watchdir.WatchDir{
-    Dir:         "/path/to/dir",
+    FS:         os.DirFS("/path/to/dir"),
     MaxDepth:    10,
     PollTimeout: time.Second * 5,
 }
