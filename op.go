@@ -4,6 +4,6 @@ package watchdir
 type Op uint8
 
 const (
-	Add    Op = 1 << 0
-	Remove Op = 1 << 1
+	Add    = Op(1 << 0)
+	Remove = Op(1 << 1)
 )

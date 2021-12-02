@@ -47,9 +47,6 @@ type WatchDir struct {
 	// LogLevel is the level of logging to actuall print to the logger. The default is WARN, which means
 	// logs of type WARN or ERROR will be printed to the logger
 	LogLevel LogLevel
-
-	// Operations is a bitmask for the operations we're interested in
-	Operations Op
 }
 
 // Event represents a file event

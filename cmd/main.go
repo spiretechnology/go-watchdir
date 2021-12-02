@@ -48,7 +48,7 @@ func main() {
 		case watchdir.Add:
 			log.Printf("[+] %s\n", event.File.Path)
 		case watchdir.Remove:
-			log.Printf("[-]: %s\n", event.File.Path)
+			log.Printf("[-] %s\n", event.File.Path)
 		}
 	}
 
