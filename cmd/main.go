@@ -5,50 +5,47 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path"
+	"strings"
 	"syscall"
 	"time"
 
-	"github.com/spiretechnology/go-watchdir"
+	"github.com/spiretechnology/go-watchdir/v2"
 )
 
 func main() {
-
 	if len(os.Args) < 2 {
 		log.Fatalln("Please provide a watch directory argument")
 	}
 
 	dir := os.Args[1]
 
-	wd := watchdir.WatchDir{
-		FS:                      os.DirFS(dir),
-		WriteStabilityThreshold: time.Second * 10,
-	}
-
 	// Create a context that is cancelled on SIGINT/SIGTERM (Ctrl+C)
 	ctx := context.Background()
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	// Channel that will receive all the watch directory events
-	chanFiles := make(chan watchdir.Event)
-
-	// In the background, watch for file changes
-	go func() {
-		err := wd.Watch(ctx, chanFiles)
-		if err != nil && err != context.Canceled {
-			panic(err)
+	wd := watchdir.New(
+		os.DirFS(dir),
+		watchdir.WithPollInterval(0),
+		watchdir.WithWriteStabilityThreshold(time.Second),
+		watchdir.WithFilter(watchdir.FilterFunc(func(ctx context.Context, filename string) (bool, error) {
+			if strings.HasPrefix(path.Base(filename), ".") {
+				return false, nil
+			}
+			return true, nil
+		})),
+	)
+	err := wd.Watch(ctx, watchdir.HandlerFunc(func(ctx context.Context, event watchdir.Event) error {
+		switch event.Type {
+		case watchdir.FileAdded:
+			log.Printf("[+] %s\n", event.File)
+		case watchdir.FileRemoved:
+			log.Printf("[-] %s\n", event.File)
 		}
-		close(chanFiles)
-	}()
-
-	// In the foreground, handle all the file events
-	for event := range chanFiles {
-		switch event.Operation {
-		case watchdir.Add:
-			log.Printf("[+] %s\n", event.File.Path)
-		case watchdir.Remove:
-			log.Printf("[-] %s\n", event.File.Path)
-		}
+		return nil
+	}))
+	if err != nil {
+		log.Fatal(err)
 	}
-
 }
