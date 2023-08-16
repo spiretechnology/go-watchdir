@@ -17,7 +17,11 @@ const (
 )
 
 type WatchDir interface {
+	// Watch starts watching the directory for changes and calls the handler on each change.
 	Watch(ctx context.Context, handler Handler) error
+
+	// Sweep performs a single sweep of the directory and calls the handler on each change.
+	Sweep(ctx context.Context, handler Handler) error
 }
 
 // EventType defines an operation that took place on the watch directory

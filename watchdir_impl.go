@@ -14,12 +14,14 @@ import (
 func New(fsys fs.FS, options ...Option) WatchDir {
 	wd := &watchDir{
 		fsys:                    fsys,
+		fileTree:                tree.NewTree(),
 		eventsMask:              AllEvents,
 		filter:                  nil,
-		pollInterval:            DefaultPollInterval,
+		sleepFunc:               nil,
 		maxDepth:                DefaultMaxDepth,
 		writeStabilityThreshold: DefaultWriteStabilityThreshold,
 	}
+	WithPollInterval(DefaultPollInterval)(wd)
 	for _, option := range options {
 		option(wd)
 	}
@@ -28,26 +30,23 @@ func New(fsys fs.FS, options ...Option) WatchDir {
 
 type watchDir struct {
 	fsys                    fs.FS
+	fileTree                *tree.Node
 	eventsMask              EventType
 	filter                  Filter
-	pollInterval            time.Duration
+	sleepFunc               func(context.Context) error
 	maxDepth                uint
 	writeStabilityThreshold time.Duration
 }
 
-// Watch begins scanning the watch directory
 func (wd *watchDir) Watch(ctx context.Context, handler Handler) error {
 	if wd.fsys == nil {
 		return errors.New("cannot watch nil file system")
 	}
 
-	// Keep track of all the files we've already seen, and when we saw them last
-	fileTree := tree.NewTree()
-
 	// Loop until we're told to stop
 	for {
 		// Perform the sweep iteration
-		if err := wd.sweep(ctx, fileTree, handler, 0, "."); err != nil {
+		if err := wd.Sweep(ctx, handler); err != nil {
 			// If the context was cancelled, return that error
 			if errors.Is(err, context.Canceled) {
 				return err
@@ -59,17 +58,18 @@ func (wd *watchDir) Watch(ctx context.Context, handler Handler) error {
 		}
 
 		// Sleep until the next sweep
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(wd.pollInterval):
+		if err := wd.sleepFunc(ctx); err != nil {
+			return err
 		}
 	}
 }
 
+func (wd *watchDir) Sweep(ctx context.Context, handler Handler) error {
+	return wd.sweep(ctx, wd.fileTree, handler, 0, ".")
+}
+
 func (wd *watchDir) sweep(ctx context.Context, dirTree *tree.Node, handler Handler, depth uint, pathPrefix string) error {
-	// Breakout if the context is cancelled. This is placed here because this function is
-	// recursive so it doesn't matter where we put this check.
+	// Breakout if the context is cancelled.
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -83,7 +83,7 @@ func (wd *watchDir) sweep(ctx context.Context, dirTree *tree.Node, handler Handl
 	// List all the files in the directory
 	entries, err := fs.ReadDir(wd.fsys, pathPrefix)
 	if err != nil {
-		fmt.Println("watchdir: error reading directory: ", err)
+		fmt.Printf("watchdir: error reading directory %q: %s\n", pathPrefix, err)
 		return err
 	}
 
@@ -94,16 +94,23 @@ func (wd *watchDir) sweep(ctx context.Context, dirTree *tree.Node, handler Handl
 	}
 
 	// Find all the entries that have been removed
+	deletedEntries := make(map[string]*tree.Node)
 	for entryName, childNode := range dirTree.Children {
 		if _, ok := entriesMap[entryName]; !ok {
-			delete(dirTree.Children, entryName)
-			if wd.eventsMask&FileRemoved != 0 {
-				if err := wd.handleRemovedFile(ctx, childNode, handler, pathPrefix); err != nil {
-					return err
-				}
+			deletedEntries[entryName] = childNode
+		}
+	}
+
+	// Delete all the removed entries
+	for entryName, childNode := range deletedEntries {
+		delete(dirTree.Children, entryName)
+		if wd.eventsMask&FileRemoved != 0 {
+			if err := wd.handleRemovedFile(ctx, childNode, handler, pathPrefix); err != nil {
+				return err
 			}
 		}
 	}
+	deletedEntries = nil
 
 	// Loop through all the entries
 	for _, entry := range entries {
@@ -181,17 +188,20 @@ func (wd *watchDir) handleNewFile(ctx context.Context, handler Handler, entry fs
 }
 
 func (wd *watchDir) handleRemovedFile(ctx context.Context, node *tree.Node, handler Handler, pathPrefix string) error {
+	// Get the relative path to the node
+	nodePath := path.Join(pathPrefix, node.Name)
+
 	// If it's a file, trigger the handler for it
 	if node.Type == tree.NodeTypeFile {
 		return handler.WatchEvent(ctx, Event{
 			Type: FileRemoved,
-			File: path.Join(pathPrefix, node.Name),
+			File: nodePath,
 		})
 	}
 
 	// If it's a directory, recursively trigger the handler for all its children
-	for entryName, childNode := range node.Children {
-		if err := wd.handleRemovedFile(ctx, childNode, handler, path.Join(pathPrefix, entryName)); err != nil {
+	for _, childNode := range node.Children {
+		if err := wd.handleRemovedFile(ctx, childNode, handler, nodePath); err != nil {
 			return err
 		}
 	}

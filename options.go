@@ -1,6 +1,9 @@
 package watchdir
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 type Option func(wd *watchDir)
 
@@ -18,7 +21,14 @@ func WithFilter(filter Filter) Option {
 
 func WithPollInterval(interval time.Duration) Option {
 	return func(wd *watchDir) {
-		wd.pollInterval = interval
+		wd.sleepFunc = func(ctx context.Context) error {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(interval):
+			}
+			return nil
+		}
 	}
 }
 
