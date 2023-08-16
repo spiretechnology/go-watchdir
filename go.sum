@@ -2,10 +2,6 @@ github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
-github.com/spiretechnology/go-memfs v0.0.0-20230816135442-b77abc538663 h1:g6tvKZw9tZbO0TndyUZB11uc4Ke8cpkAE/DXcdyioYk=
-github.com/spiretechnology/go-memfs v0.0.0-20230816135442-b77abc538663/go.mod h1:cMxaDLqH+CQ2uKV6+YSFcPyA46ND6wJM5M0cdaJLTgY=
-github.com/spiretechnology/go-memfs v0.0.0-20230816143707-aafcef6354ae h1:OOcTiLAeUItdsoAWiaBMetwATVKQN8pydDUF9TDimRw=
-github.com/spiretechnology/go-memfs v0.0.0-20230816143707-aafcef6354ae/go.mod h1:cMxaDLqH+CQ2uKV6+YSFcPyA46ND6wJM5M0cdaJLTgY=
 github.com/spiretechnology/go-memfs v0.0.0-20230816144105-92fe4949a86e h1:ET8NEZiyptCwo+N7b3prP2B8cMkNgKJpeKpf7yJLX18=
 github.com/spiretechnology/go-memfs v0.0.0-20230816144105-92fe4949a86e/go.mod h1:cMxaDLqH+CQ2uKV6+YSFcPyA46ND6wJM5M0cdaJLTgY=
 github.com/stretchr/testify v1.8.4 h1:CcVxjf3Q8PM0mHUKJCdn+eZZtm5yQwehR5yeSVQQcUk=
