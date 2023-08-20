@@ -61,3 +61,19 @@ func WithExcludeDirs(dirs ...string) Option {
 		return !ok, nil
 	}))
 }
+
+// func WithOnlyDirs(dirs ...string) Option {
+// 	dirsMap := make(map[string]struct{})
+// 	for _, dir := range dirs {
+// 		dir = normalizePath(dir)
+// 		dirsMap[dir] = struct{}{}
+// 	}
+// 	return WithDirFilter(FilterFunc(func(ctx context.Context, dir string) (bool, error) {
+// 		// If it's an exact match, return true
+// 		if _, ok := dirsMap[dir]; ok {
+// 			return true, nil
+// 		}
+
+// 		// If it's a descendant of one of the dirs
+// 	}))
+// }

@@ -160,4 +160,26 @@ func TestWatchDir(t *testing.T) {
 		require.Len(t, handler.events[watchdir.FileRemoved], 0, "wrong number of remove events")
 		handler.Clear()
 	})
+	t.Run("directory exclusions", func(t *testing.T) {
+		fsys := memfs.FS{
+			"hello/foo/a":       memfs.File(""),
+			"hello/foo/bar/a":   memfs.File(""),
+			"hello/foo/bar/baz": memfs.Dir{},
+			"hello/bar/a":       memfs.File(""),
+			"world/baz/a":       memfs.File(""),
+		}
+		wd := watchdir.New(fsys,
+			watchdir.WithWriteStabilityThreshold(0),
+			watchdir.WithExcludeDirs("hello/foo"),
+		)
+		handler := &spyHandler{}
+
+		// Initial sweep. Should find three files.
+		err := wd.Sweep(context.Background(), handler)
+		require.NoError(t, err, "error sweeping")
+		require.Len(t, handler.events[watchdir.FileAdded], 2, "wrong number of add events")
+		require.Len(t, handler.events[watchdir.FileRemoved], 0, "wrong number of remove events")
+		require.ElementsMatch(t, []string{"hello/bar/a", "world/baz/a"}, handler.events[watchdir.FileAdded], "wrong files added")
+		handler.Clear()
+	})
 }
