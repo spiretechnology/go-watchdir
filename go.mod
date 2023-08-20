@@ -3,7 +3,7 @@ module github.com/spiretechnology/go-watchdir/v2
 go 1.20
 
 require (
-	github.com/spiretechnology/go-memfs v0.0.0-20230816144105-92fe4949a86e
+	github.com/spiretechnology/go-memfs v1.1.0
 	github.com/stretchr/testify v1.8.4
 )
 

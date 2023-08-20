@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path"
 	"time"
 
@@ -67,15 +68,29 @@ func (wd *watcher) Watch(ctx context.Context, handler Handler) error {
 	}
 }
 
-func (wd *watcher) Sweep(ctx context.Context, handler Handler) error {
-	fsys := wd.fsys
-	if wd.subRoot != "" {
-		subFs, err := fs.Sub(fsys, wd.subRoot)
-		if err != nil {
-			return err
-		}
-		fsys = subFs
+func (wd *watcher) getSweepFS() (fs.FS, error) {
+	// If there is no sub-root configured, use the root fs
+	if wd.subRoot == "" {
+		return wd.fsys, nil
 	}
+
+	// If the sub-root doesn't exist, return an error
+	if _, err := fs.Stat(wd.fsys, wd.subRoot); os.IsNotExist(err) {
+		return nil, err
+	}
+
+	// Replace the fsys (for this scan) with the sub-root fs
+	return fs.Sub(wd.fsys, wd.subRoot)
+}
+
+func (wd *watcher) Sweep(ctx context.Context, handler Handler) error {
+	// Get the fsys for the sweep, which can be a sub-fs
+	fsys, err := wd.getSweepFS()
+	if err != nil {
+		return err
+	}
+
+	// Sweep the fsys recursively
 	return wd.sweep(ctx, fsys, wd.fileTree, handler, 0, ".")
 }
 

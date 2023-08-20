@@ -226,4 +226,55 @@ func TestWatchDir(t *testing.T) {
 		mockDirFilter.AssertExpectations(t)
 		mockFileFilter.AssertExpectations(t)
 	})
+	t.Run("sub root that doesn't exist", func(t *testing.T) {
+		fsys := memfs.FS{
+			"hello/a": memfs.File(""),
+		}
+		mockDirFilter := &mocks.MockFilter{}
+		mockFileFilter := &mocks.MockFilter{}
+		wd := watchdir.New(fsys,
+			watchdir.WithWriteStabilityThreshold(0),
+			watchdir.WithSubRoot("world"),
+			watchdir.WithDirFilter(mockDirFilter),
+			watchdir.WithFileFilter(mockFileFilter),
+		)
+		handler := &spyHandler{}
+
+		// Initial sweep. Should error because the root doesn't exist.
+		err := wd.Sweep(context.Background(), handler)
+		require.Error(t, err, "should error sweeping")
+		require.Len(t, handler.events[watchdir.FileAdded], 0, "wrong number of add events")
+		require.Len(t, handler.events[watchdir.FileRemoved], 0, "wrong number of remove events")
+		handler.Clear()
+		mockDirFilter.AssertExpectations(t)
+		mockFileFilter.AssertExpectations(t)
+
+		// Now, add the sub-root and try again
+		fsys["world/a"] = memfs.File("")
+		fsys["world/b"] = memfs.File("")
+		fsys["world/c"] = memfs.File("")
+		fsys["world/child/a"] = memfs.File("")
+		fsys["world/child/grandchild"] = memfs.Dir{}
+
+		// Setup expectations for dir filter
+		mockDirFilter.On("Filter", mock.Anything, "world").Return(true, nil)
+		mockDirFilter.On("Filter", mock.Anything, "world/child").Return(true, nil)
+		mockDirFilter.On("Filter", mock.Anything, "world/child/grandchild").Return(true, nil)
+
+		// Setup expectations for file filter
+		mockFileFilter.On("Filter", mock.Anything, "world/a").Return(true, nil)
+		mockFileFilter.On("Filter", mock.Anything, "world/b").Return(true, nil)
+		mockFileFilter.On("Filter", mock.Anything, "world/c").Return(true, nil)
+		mockFileFilter.On("Filter", mock.Anything, "world/child/a").Return(true, nil)
+
+		// Initial sweep. Should error because the root doesn't exist.
+		err = wd.Sweep(context.Background(), handler)
+		require.NoError(t, err, "error sweeping")
+		require.Len(t, handler.events[watchdir.FileAdded], 4, "wrong number of add events")
+		require.Len(t, handler.events[watchdir.FileRemoved], 0, "wrong number of remove events")
+		require.ElementsMatch(t, []string{"world/a", "world/b", "world/c", "world/child/a"}, handler.events[watchdir.FileAdded], "wrong files added")
+		handler.Clear()
+		mockDirFilter.AssertExpectations(t)
+		mockFileFilter.AssertExpectations(t)
+	})
 }
