@@ -11,12 +11,13 @@ import (
 	"github.com/spiretechnology/go-watchdir/v2/internal/tree"
 )
 
-func New(fsys fs.FS, options ...Option) WatchDir {
-	wd := &watchDir{
+func New(fsys fs.FS, options ...Option) Watcher {
+	wd := &watcher{
 		fsys:                    fsys,
 		fileTree:                tree.NewTree(),
 		eventsMask:              AllEvents,
-		filter:                  nil,
+		fileFilter:              nil,
+		dirFilter:               nil,
 		sleepFunc:               nil,
 		maxDepth:                DefaultMaxDepth,
 		writeStabilityThreshold: DefaultWriteStabilityThreshold,
@@ -28,17 +29,18 @@ func New(fsys fs.FS, options ...Option) WatchDir {
 	return wd
 }
 
-type watchDir struct {
+type watcher struct {
 	fsys                    fs.FS
 	fileTree                *tree.Node
 	eventsMask              EventType
-	filter                  Filter
+	fileFilter              Filter
+	dirFilter               Filter
 	sleepFunc               func(context.Context) error
 	maxDepth                uint
 	writeStabilityThreshold time.Duration
 }
 
-func (wd *watchDir) Watch(ctx context.Context, handler Handler) error {
+func (wd *watcher) Watch(ctx context.Context, handler Handler) error {
 	if wd.fsys == nil {
 		return errors.New("cannot watch nil file system")
 	}
@@ -64,11 +66,11 @@ func (wd *watchDir) Watch(ctx context.Context, handler Handler) error {
 	}
 }
 
-func (wd *watchDir) Sweep(ctx context.Context, handler Handler) error {
+func (wd *watcher) Sweep(ctx context.Context, handler Handler) error {
 	return wd.sweep(ctx, wd.fileTree, handler, 0, ".")
 }
 
-func (wd *watchDir) sweep(ctx context.Context, dirTree *tree.Node, handler Handler, depth uint, pathPrefix string) error {
+func (wd *watcher) sweep(ctx context.Context, dirTree *tree.Node, handler Handler, depth uint, pathPrefix string) error {
 	// Breakout if the context is cancelled.
 	if err := ctx.Err(); err != nil {
 		return err
@@ -119,8 +121,8 @@ func (wd *watchDir) sweep(ctx context.Context, dirTree *tree.Node, handler Handl
 		entryPath := path.Join(pathPrefix, entryName)
 
 		// Allow the filter a chance to ignore the file
-		if !entry.IsDir() && wd.filter != nil {
-			keep, err := wd.filter.Filter(ctx, entryPath)
+		if !entry.IsDir() && wd.fileFilter != nil {
+			keep, err := wd.fileFilter.Filter(ctx, entryPath)
 			if err != nil {
 				return err
 			}
@@ -152,7 +154,7 @@ func (wd *watchDir) sweep(ctx context.Context, dirTree *tree.Node, handler Handl
 	return nil
 }
 
-func (wd *watchDir) handleNewFile(ctx context.Context, handler Handler, entry fs.DirEntry, pathPrefix string) (*tree.Node, error) {
+func (wd *watcher) handleNewFile(ctx context.Context, handler Handler, entry fs.DirEntry, pathPrefix string) (*tree.Node, error) {
 	// Create the new child node
 	var childNode *tree.Node
 	if entry.IsDir() {
@@ -187,7 +189,7 @@ func (wd *watchDir) handleNewFile(ctx context.Context, handler Handler, entry fs
 	return childNode, nil
 }
 
-func (wd *watchDir) handleRemovedFile(ctx context.Context, node *tree.Node, handler Handler, pathPrefix string) error {
+func (wd *watcher) handleRemovedFile(ctx context.Context, node *tree.Node, handler Handler, pathPrefix string) error {
 	// Get the relative path to the node
 	nodePath := path.Join(pathPrefix, node.Name)
 

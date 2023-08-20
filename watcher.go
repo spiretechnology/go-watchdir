@@ -16,7 +16,7 @@ const (
 	DefaultWriteStabilityThreshold = 15 * time.Second
 )
 
-type WatchDir interface {
+type Watcher interface {
 	// Watch starts watching the directory for changes and calls the handler on each change.
 	Watch(ctx context.Context, handler Handler) error
 
