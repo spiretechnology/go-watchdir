@@ -76,6 +76,17 @@ func (wd *watcher) sweep(ctx context.Context, dirTree *tree.Node, handler Handle
 		return err
 	}
 
+	// If this directory is excluded, skip it
+	if wd.dirFilter != nil {
+		include, err := wd.dirFilter.Filter(ctx, pathPrefix)
+		if err != nil {
+			return err
+		}
+		if !include {
+			return nil
+		}
+	}
+
 	// Return if the depth is too deep
 	if depth >= wd.maxDepth {
 		fmt.Println("watchdir: hit max depth")
