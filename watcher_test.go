@@ -6,6 +6,8 @@ import (
 
 	"github.com/spiretechnology/go-memfs"
 	"github.com/spiretechnology/go-watchdir/v2"
+	"github.com/spiretechnology/go-watchdir/v2/mocks"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -192,11 +194,27 @@ func TestWatchDir(t *testing.T) {
 			"world/baz/b":       memfs.File(""),
 			"world/baz/c":       memfs.File(""),
 		}
+		mockDirFilter := &mocks.MockFilter{}
+		mockFileFilter := &mocks.MockFilter{}
 		wd := watchdir.New(fsys,
 			watchdir.WithWriteStabilityThreshold(0),
 			watchdir.WithSubRoot("hello"),
+			watchdir.WithDirFilter(mockDirFilter),
+			watchdir.WithFileFilter(mockFileFilter),
 		)
 		handler := &spyHandler{}
+
+		// Setup expectations for dir filter
+		mockDirFilter.On("Filter", mock.Anything, "hello").Return(true, nil)
+		mockDirFilter.On("Filter", mock.Anything, "hello/foo").Return(true, nil)
+		mockDirFilter.On("Filter", mock.Anything, "hello/foo/bar").Return(true, nil)
+		mockDirFilter.On("Filter", mock.Anything, "hello/foo/bar/baz").Return(true, nil)
+		mockDirFilter.On("Filter", mock.Anything, "hello/bar").Return(true, nil)
+
+		// Setup expectations for file filter
+		mockFileFilter.On("Filter", mock.Anything, "hello/foo/a").Return(true, nil)
+		mockFileFilter.On("Filter", mock.Anything, "hello/foo/bar/a").Return(true, nil)
+		mockFileFilter.On("Filter", mock.Anything, "hello/bar/a").Return(true, nil)
 
 		// Initial sweep. Should find three files.
 		err := wd.Sweep(context.Background(), handler)
@@ -205,5 +223,7 @@ func TestWatchDir(t *testing.T) {
 		require.Len(t, handler.events[watchdir.FileRemoved], 0, "wrong number of remove events")
 		require.ElementsMatch(t, []string{"hello/foo/a", "hello/foo/bar/a", "hello/bar/a"}, handler.events[watchdir.FileAdded], "wrong files added")
 		handler.Clear()
+		mockDirFilter.AssertExpectations(t)
+		mockFileFilter.AssertExpectations(t)
 	})
 }

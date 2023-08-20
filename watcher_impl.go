@@ -87,7 +87,7 @@ func (wd *watcher) sweep(ctx context.Context, fsys fs.FS, dirTree *tree.Node, ha
 
 	// If this directory is excluded, skip it
 	if wd.dirFilter != nil {
-		include, err := wd.dirFilter.Filter(ctx, pathPrefix)
+		include, err := wd.dirFilter.Filter(ctx, wd.prependSubRoot(pathPrefix))
 		if err != nil {
 			return err
 		}
@@ -142,7 +142,7 @@ func (wd *watcher) sweep(ctx context.Context, fsys fs.FS, dirTree *tree.Node, ha
 
 		// Allow the filter a chance to ignore the file
 		if !entry.IsDir() && wd.fileFilter != nil {
-			keep, err := wd.fileFilter.Filter(ctx, entryPath)
+			keep, err := wd.fileFilter.Filter(ctx, wd.prependSubRoot(entryPath))
 			if err != nil {
 				return err
 			}
@@ -201,7 +201,7 @@ func (wd *watcher) handleNewFile(ctx context.Context, handler Handler, entry fs.
 	if wd.eventsMask&FileAdded != 0 {
 		if err := handler.WatchEvent(ctx, Event{
 			Type: FileAdded,
-			File: path.Join(pathPrefix, entry.Name()),
+			File: wd.prependSubRoot(path.Join(pathPrefix, entry.Name())),
 		}); err != nil {
 			return nil, err
 		}
@@ -217,7 +217,7 @@ func (wd *watcher) handleRemovedFile(ctx context.Context, node *tree.Node, handl
 	if node.Type == tree.NodeTypeFile {
 		return handler.WatchEvent(ctx, Event{
 			Type: FileRemoved,
-			File: nodePath,
+			File: wd.prependSubRoot(nodePath),
 		})
 	}
 
@@ -228,4 +228,11 @@ func (wd *watcher) handleRemovedFile(ctx context.Context, node *tree.Node, handl
 		}
 	}
 	return nil
+}
+
+func (wd *watcher) prependSubRoot(name string) string {
+	if wd.subRoot == "" {
+		return name
+	}
+	return path.Join(wd.subRoot, name)
 }
