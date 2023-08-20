@@ -31,6 +31,7 @@ func New(fsys fs.FS, options ...Option) Watcher {
 
 type watcher struct {
 	fsys                    fs.FS
+	subRoot                 string
 	fileTree                *tree.Node
 	eventsMask              EventType
 	fileFilter              Filter
@@ -67,10 +68,18 @@ func (wd *watcher) Watch(ctx context.Context, handler Handler) error {
 }
 
 func (wd *watcher) Sweep(ctx context.Context, handler Handler) error {
-	return wd.sweep(ctx, wd.fileTree, handler, 0, ".")
+	fsys := wd.fsys
+	if wd.subRoot != "" {
+		subFs, err := fs.Sub(fsys, wd.subRoot)
+		if err != nil {
+			return err
+		}
+		fsys = subFs
+	}
+	return wd.sweep(ctx, fsys, wd.fileTree, handler, 0, ".")
 }
 
-func (wd *watcher) sweep(ctx context.Context, dirTree *tree.Node, handler Handler, depth uint, pathPrefix string) error {
+func (wd *watcher) sweep(ctx context.Context, fsys fs.FS, dirTree *tree.Node, handler Handler, depth uint, pathPrefix string) error {
 	// Breakout if the context is cancelled.
 	if err := ctx.Err(); err != nil {
 		return err
@@ -94,7 +103,7 @@ func (wd *watcher) sweep(ctx context.Context, dirTree *tree.Node, handler Handle
 	}
 
 	// List all the files in the directory
-	entries, err := fs.ReadDir(wd.fsys, pathPrefix)
+	entries, err := fs.ReadDir(fsys, pathPrefix)
 	if err != nil {
 		fmt.Printf("watchdir: error reading directory %q: %s\n", pathPrefix, err)
 		return err
@@ -157,7 +166,7 @@ func (wd *watcher) sweep(ctx context.Context, dirTree *tree.Node, handler Handle
 
 		// If the entry is a directory, sweep it recursively too
 		if entry.IsDir() {
-			if err := wd.sweep(ctx, childNode, handler, depth+1, entryPath); err != nil {
+			if err := wd.sweep(ctx, fsys, childNode, handler, depth+1, entryPath); err != nil {
 				return err
 			}
 		}
