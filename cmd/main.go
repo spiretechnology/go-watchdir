@@ -29,7 +29,7 @@ func main() {
 		os.DirFS(dir),
 		watchdir.WithPollInterval(0),
 		watchdir.WithWriteStabilityThreshold(time.Second),
-		watchdir.WithFilter(watchdir.FilterFunc(func(ctx context.Context, filename string) (bool, error) {
+		watchdir.WithFileFilter(watchdir.FilterFunc(func(ctx context.Context, filename string) (bool, error) {
 			if strings.HasPrefix(path.Base(filename), ".") {
 				return false, nil
 			}
