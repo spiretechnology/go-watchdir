@@ -7,10 +7,13 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"sort"
 	"time"
 
 	"github.com/spiretechnology/go-watchdir/v2/internal/tree"
 )
+
+type SortFunc func(a, b fs.DirEntry) int
 
 func New(fsys fs.FS, options ...Option) Watcher {
 	wd := &watcher{
@@ -40,6 +43,7 @@ type watcher struct {
 	sleepFunc               func(context.Context) error
 	maxDepth                uint
 	writeStabilityThreshold time.Duration
+	sortFunc                SortFunc
 }
 
 func (wd *watcher) Watch(ctx context.Context, handler Handler) error {
@@ -122,6 +126,13 @@ func (wd *watcher) sweep(ctx context.Context, fsys fs.FS, dirTree *tree.Node, ha
 	if err != nil {
 		fmt.Printf("watchdir: error reading directory %q: %s\n", pathPrefix, err)
 		return err
+	}
+
+	// If a sort function is provided, sort the entries
+	if wd.sortFunc != nil {
+		sort.Slice(entries, func(i, j int) bool {
+			return wd.sortFunc(entries[i], entries[j]) < 0
+		})
 	}
 
 	// Create a map of entries

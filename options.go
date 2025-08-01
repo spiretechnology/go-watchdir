@@ -67,3 +67,9 @@ func WithSubRoot(root string) Option {
 		wd.subRoot = normalizePath(root)
 	}
 }
+
+func WithSort(sortFunc SortFunc) Option {
+	return func(wd *watcher) {
+		wd.sortFunc = sortFunc
+	}
+}
