@@ -2,6 +2,7 @@ package watchdir
 
 import (
 	"context"
+	"log"
 	"time"
 )
 
@@ -10,19 +11,6 @@ type Option func(wd *watcher)
 func WithEvents(mask EventType) Option {
 	return func(wd *watcher) {
 		wd.eventsMask = mask
-	}
-}
-
-func WithPollInterval(interval time.Duration) Option {
-	return func(wd *watcher) {
-		wd.sleepFunc = func(ctx context.Context) error {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(interval):
-			}
-			return nil
-		}
 	}
 }
 
@@ -68,8 +56,8 @@ func WithSubRoot(root string) Option {
 	}
 }
 
-func WithSort(sortFunc SortFunc) Option {
+func WithLogger(logger *log.Logger) Option {
 	return func(wd *watcher) {
-		wd.sortFunc = sortFunc
+		wd.logger = logger
 	}
 }

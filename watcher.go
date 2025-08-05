@@ -2,6 +2,7 @@ package watchdir
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -9,19 +10,13 @@ const (
 	// DefaultMaxDepth is the default maximum depth to sweep to, if nothing else is specified.
 	DefaultMaxDepth = 10
 
-	// DefaultPollInterval is the default timeout between polling interations, if nothing else is specified.
-	DefaultPollInterval = 15 * time.Second
-
 	// DefaultWriteStabilityThreshold is the default amount of time since last modification before a file is detected.
 	DefaultWriteStabilityThreshold = 15 * time.Second
 )
 
 type Watcher interface {
-	// Watch starts watching the directory for changes and calls the handler on each change.
-	Watch(ctx context.Context, handler Handler) error
-
 	// Sweep performs a single sweep of the directory and calls the handler on each change.
-	Sweep(ctx context.Context, handler Handler) error
+	Sweep(ctx context.Context, chanEvents chan<- Event) error
 }
 
 // EventType defines an operation that took place on the watch directory
@@ -39,12 +34,27 @@ type Event struct {
 	File string
 }
 
-type Handler interface {
-	WatchEvent(ctx context.Context, event Event) error
-}
+// Watch performs a periodic sweep of a given directory and sends events to the provided channel.
+func Watch(
+	ctx context.Context,
+	w Watcher,
+	sweepInterval time.Duration,
+	chanEvents chan<- Event,
+) error {
+	for {
+		// Perform the sweep iteration
+		if err := w.Sweep(ctx, chanEvents); err != nil {
+			// If the context was cancelled, return that error
+			if errors.Is(err, context.Canceled) {
+				return err
+			}
+		}
 
-type HandlerFunc func(ctx context.Context, event Event) error
-
-func (h HandlerFunc) WatchEvent(ctx context.Context, event Event) error {
-	return h(ctx, event)
+		// Sleep for the configured interval
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(sweepInterval):
+		}
+	}
 }

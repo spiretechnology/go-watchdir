@@ -5,74 +5,62 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path"
-	"sort"
 	"time"
 
-	"github.com/spiretechnology/go-watchdir/v2/internal/tree"
+	"golang.org/x/sync/errgroup"
 )
-
-type SortFunc func(a, b fs.DirEntry) int
 
 func New(fsys fs.FS, options ...Option) Watcher {
 	wd := &watcher{
 		fsys:                    fsys,
-		fileTree:                tree.NewTree(),
 		eventsMask:              AllEvents,
 		fileFilter:              nil,
 		dirFilter:               nil,
-		sleepFunc:               nil,
 		maxDepth:                DefaultMaxDepth,
 		writeStabilityThreshold: DefaultWriteStabilityThreshold,
+		logger:                  log.New(os.Stdout, "[watchdir] ", log.LstdFlags),
+		cache:                   newDirCache(),
 	}
-	WithPollInterval(DefaultPollInterval)(wd)
 	for _, option := range options {
 		option(wd)
 	}
 	return wd
 }
 
+type dirCache struct {
+	entries  map[string]fs.DirEntry
+	children map[string]*dirCache
+}
+
+func newDirCache() *dirCache {
+	return &dirCache{
+		entries:  make(map[string]fs.DirEntry),
+		children: make(map[string]*dirCache),
+	}
+}
+
 type watcher struct {
 	fsys                    fs.FS
 	subRoot                 string
-	fileTree                *tree.Node
 	eventsMask              EventType
 	fileFilter              Filter
 	dirFilter               Filter
-	sleepFunc               func(context.Context) error
 	maxDepth                uint
 	writeStabilityThreshold time.Duration
-	sortFunc                SortFunc
-}
+	logger                  *log.Logger
 
-func (wd *watcher) Watch(ctx context.Context, handler Handler) error {
-	if wd.fsys == nil {
-		return errors.New("cannot watch nil file system")
-	}
-
-	// Loop until we're told to stop
-	for {
-		// Perform the sweep iteration
-		if err := wd.Sweep(ctx, handler); err != nil {
-			// If the context was cancelled, return that error
-			if errors.Is(err, context.Canceled) {
-				return err
-			}
-
-			// Other errors should not cause the watch process to end, so we just
-			// log them and continue
-			fmt.Printf("watchdir: sweep error: %s\n", err)
-		}
-
-		// Sleep until the next sweep
-		if err := wd.sleepFunc(ctx); err != nil {
-			return err
-		}
-	}
+	cache *dirCache
 }
 
 func (wd *watcher) getSweepFS() (fs.FS, error) {
+	// If there is no file system, return an error
+	if wd.fsys == nil {
+		return nil, errors.New("cannot watch nil file system")
+	}
+
 	// If there is no sub-root configured, use the root fs
 	if wd.subRoot == "" {
 		return wd.fsys, nil
@@ -87,18 +75,44 @@ func (wd *watcher) getSweepFS() (fs.FS, error) {
 	return fs.Sub(wd.fsys, wd.subRoot)
 }
 
-func (wd *watcher) Sweep(ctx context.Context, handler Handler) error {
+func (wd *watcher) Sweep(ctx context.Context, chanEvents chan<- Event) (reterr error) {
+	startTime := time.Now()
+	wd.logger.Println("sweep started")
+	defer func() {
+		duration := time.Since(startTime)
+		if reterr != nil {
+			wd.logger.Printf("sweep took %s, returned error: %+v", duration, reterr)
+		} else {
+			wd.logger.Printf("sweep took %s, completed successfully", duration)
+		}
+	}()
+
 	// Get the fsys for the sweep, which can be a sub-fs
 	fsys, err := wd.getSweepFS()
 	if err != nil {
 		return err
 	}
 
-	// Sweep the fsys recursively
-	return wd.sweep(ctx, fsys, wd.fileTree, handler, 0, ".")
+	// Sweep the file system recursively
+	return wd.sweep(ctx, fsys, chanEvents, 0, ".", wd.cache)
 }
 
-func (wd *watcher) sweep(ctx context.Context, fsys fs.FS, dirTree *tree.Node, handler Handler, depth uint, pathPrefix string) error {
+func readDir(fsys fs.FS, pathPrefix string) (map[string]fs.DirEntry, error) {
+	// Read the directory entries
+	entries, err := fs.ReadDir(fsys, pathPrefix)
+	if err != nil {
+		return nil, fmt.Errorf("readdir: %w", err)
+	}
+
+	// Convert it to a map for easier lookups
+	entriesMap := make(map[string]fs.DirEntry, len(entries))
+	for _, entry := range entries {
+		entriesMap[entry.Name()] = entry
+	}
+	return entriesMap, nil
+}
+
+func (wd *watcher) sweep(ctx context.Context, fsys fs.FS, chanEvents chan<- Event, depth uint, pathPrefix string, cache *dirCache) error {
 	// Breakout if the context is cancelled.
 	if err := ctx.Err(); err != nil {
 		return err
@@ -108,7 +122,7 @@ func (wd *watcher) sweep(ctx context.Context, fsys fs.FS, dirTree *tree.Node, ha
 	if wd.dirFilter != nil {
 		include, err := wd.dirFilter.Filter(ctx, wd.prependSubRoot(pathPrefix))
 		if err != nil {
-			return err
+			return fmt.Errorf("filter dir %q: %w", pathPrefix, err)
 		}
 		if !include {
 			return nil
@@ -117,140 +131,155 @@ func (wd *watcher) sweep(ctx context.Context, fsys fs.FS, dirTree *tree.Node, ha
 
 	// Return if the depth is too deep
 	if depth >= wd.maxDepth {
-		fmt.Println("watchdir: hit max depth")
+		wd.logger.Printf("hit max depth %d", depth)
 		return nil
 	}
 
-	// List all the files in the directory
-	entries, err := fs.ReadDir(fsys, pathPrefix)
+	// Read the entries in the directory
+	entries, err := readDir(fsys, pathPrefix)
 	if err != nil {
-		fmt.Printf("watchdir: error reading directory %q: %s\n", pathPrefix, err)
-		return err
+		return fmt.Errorf("read dir %q: %w", pathPrefix, err)
 	}
 
-	// If a sort function is provided, sort the entries
-	if wd.sortFunc != nil {
-		sort.Slice(entries, func(i, j int) bool {
-			return wd.sortFunc(entries[i], entries[j]) < 0
-		})
-	}
-
-	// Create a map of entries
-	entriesMap := make(map[string]fs.DirEntry)
-	for _, entry := range entries {
-		entriesMap[entry.Name()] = entry
-	}
-
-	// Find all the entries that have been removed
-	deletedEntries := make(map[string]*tree.Node)
-	for entryName, childNode := range dirTree.Children {
-		if _, ok := entriesMap[entryName]; !ok {
-			deletedEntries[entryName] = childNode
-		}
-	}
-
-	// Delete all the removed entries
-	for entryName, childNode := range deletedEntries {
-		delete(dirTree.Children, entryName)
-		if wd.eventsMask&FileRemoved != 0 {
-			if err := wd.handleRemovedFile(ctx, childNode, handler, pathPrefix); err != nil {
-				return err
-			}
-		}
-	}
-	deletedEntries = nil
-
-	// Loop through all the entries
-	for _, entry := range entries {
-		// Create the full path to the entry
-		entryName := entry.Name()
-		entryPath := path.Join(pathPrefix, entryName)
-
-		// Allow the filter a chance to ignore the file
-		if !entry.IsDir() && wd.fileFilter != nil {
-			keep, err := wd.fileFilter.Filter(ctx, wd.prependSubRoot(entryPath))
-			if err != nil {
-				return err
-			}
-			if !keep {
+	// Remove any file entries that are excluded by the file filter
+	if wd.fileFilter != nil {
+		for name, entry := range entries {
+			if entry.IsDir() {
 				continue
 			}
-		}
-
-		// If the entry doesn't exist, create it
-		childNode, ok := dirTree.Children[entryName]
-		if !ok {
-			childNode, err = wd.handleNewFile(ctx, handler, entry, pathPrefix)
+			include, err := wd.fileFilter.Filter(ctx, wd.prependSubRoot(path.Join(pathPrefix, name)))
 			if err != nil {
-				return err
+				return fmt.Errorf("filter file %q: %w", name, err)
 			}
-			if childNode == nil {
-				continue
+			if !include {
+				delete(entries, name)
 			}
-			dirTree.Children[entryName] = childNode
 		}
+	}
 
-		// If the entry is a directory, sweep it recursively too
+	// Find entries that are newly added (didn't previously exist)
+	for name, entry := range entries {
 		if entry.IsDir() {
-			if err := wd.sweep(ctx, fsys, childNode, handler, depth+1, entryPath); err != nil {
-				return err
+			continue
+		}
+		// If the file already exists in the cache, skip it
+		if cache.entries[name] != nil {
+			continue
+		}
+		// Ignore the file if it doesn't pass the file filter
+		if wd.fileFilter != nil {
+			include, err := wd.fileFilter.Filter(ctx, wd.prependSubRoot(path.Join(pathPrefix, name)))
+			if err != nil {
+				return fmt.Errorf("filter file %q: %w", name, err)
+			}
+			if !include {
+				delete(entries, name)
+				continue
 			}
 		}
+		// Ignore the file if it fails the write stability threshold
+		if wd.writeStabilityThreshold > 0 {
+			stat, err := entry.Info()
+			if err != nil {
+				return fmt.Errorf("stat entry %q: %w", name, err)
+			}
+			if stat.ModTime().Add(wd.writeStabilityThreshold).After(time.Now()) {
+				delete(entries, name)
+				continue
+			}
+		}
+		// If the file is new, send an event
+		if wd.eventsMask&FileAdded != 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case chanEvents <- Event{
+				Type: FileAdded,
+				File: wd.prependSubRoot(path.Join(pathPrefix, name)),
+			}:
+			}
+		}
+	}
+
+	// Find entries that were removed (existed previously but not now)
+	for name, prevEntry := range cache.entries {
+		if _, stillExists := entries[name]; stillExists {
+			continue
+		}
+		if prevEntry.IsDir() {
+			if err := wd.sweepDeleted(ctx, fsys, chanEvents, path.Join(pathPrefix, name), cache.children[name]); err != nil {
+				return fmt.Errorf("sweep deleted directory %q: %w", path.Join(pathPrefix, name), err)
+			}
+			delete(cache.children, name)
+		} else if wd.eventsMask&FileRemoved != 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case chanEvents <- Event{
+				Type: FileRemoved,
+				File: wd.prependSubRoot(path.Join(pathPrefix, name)),
+			}:
+			}
+		}
+	}
+
+	// Update the cache with the current entries
+	cache.entries = entries
+
+	eg, ctx := errgroup.WithContext(ctx)
+
+	// Quickly update the children map to ensure it has entries for all current directories
+	// This cannot be done concurrently due to map access
+	for name, entry := range entries {
+		if entry.IsDir() {
+			// Create the child cache if it doesn't exist
+			if cache.children[name] == nil {
+				cache.children[name] = newDirCache()
+			}
+		}
+	}
+
+	// Sweep all child directories
+	for name, entry := range entries {
+		if entry.IsDir() {
+			eg.Go(func() error {
+				// Recursively sweep the child directory, creating the new cache for it
+				if err := wd.sweep(ctx, fsys, chanEvents, depth+1, path.Join(pathPrefix, name), cache.children[name]); err != nil {
+					return fmt.Errorf("sweep directory %q: %w", path.Join(pathPrefix, name), err)
+				}
+				return nil
+			})
+		}
+	}
+
+	// Wait for all of the goroutines to complete
+	if err := eg.Wait(); err != nil {
+		return fmt.Errorf("wait for sweep goroutines: %w", err)
 	}
 	return nil
 }
 
-func (wd *watcher) handleNewFile(ctx context.Context, handler Handler, entry fs.DirEntry, pathPrefix string) (*tree.Node, error) {
-	// Create the new child node
-	var childNode *tree.Node
-	if entry.IsDir() {
-		childNode = tree.NewNode(entry.Name(), tree.NodeTypeFolder)
-	} else {
-		childNode = tree.NewNode(entry.Name(), tree.NodeTypeFile)
+func (wd *watcher) sweepDeleted(ctx context.Context, fsys fs.FS, chanEvents chan<- Event, pathPrefix string, cache *dirCache) error {
+	// Get the previous sweep data for this directory
+	if cache == nil {
+		return nil // Nothing to sweep
 	}
 
-	// If the entry is a directory, nothing more to do here
-	if entry.IsDir() {
-		return childNode, nil
-	}
-
-	// Ensure the file has passed the write stability threshold
-	entryStat, err := entry.Info()
-	if err != nil {
-		return nil, err
-	}
-	if entryStat.ModTime().Add(wd.writeStabilityThreshold).After(time.Now()) {
-		return nil, nil
-	}
-
-	// Trigger the event handler
-	if wd.eventsMask&FileAdded != 0 {
-		if err := handler.WatchEvent(ctx, Event{
-			Type: FileAdded,
-			File: wd.prependSubRoot(path.Join(pathPrefix, entry.Name())),
-		}); err != nil {
-			return nil, err
-		}
-	}
-	return childNode, nil
-}
-
-func (wd *watcher) handleRemovedFile(ctx context.Context, node *tree.Node, handler Handler, pathPrefix string) error {
-	// Get the relative path to the node
-	nodePath := path.Join(pathPrefix, node.Name)
-
-	// If it's a file, trigger the handler for it
-	if node.Type == tree.NodeTypeFile {
-		return handler.WatchEvent(ctx, Event{
-			Type: FileRemoved,
-			File: wd.prependSubRoot(nodePath),
-		})
-	}
-
-	// If it's a directory, recursively trigger the handler for all its children
-	for _, childNode := range node.Children {
-		if err := wd.handleRemovedFile(ctx, childNode, handler, nodePath); err != nil {
-			return err
+	// Loop over all of the entries that were previously cached
+	for name, prevEntry := range cache.entries {
+		if prevEntry.IsDir() {
+			if err := wd.sweepDeleted(ctx, fsys, chanEvents, path.Join(pathPrefix, name), cache.children[name]); err != nil {
+				return fmt.Errorf("sweep deleted directory %q: %w", path.Join(pathPrefix, name), err)
+			}
+		} else if wd.eventsMask&FileRemoved != 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case chanEvents <- Event{
+				Type: FileRemoved,
+				File: wd.prependSubRoot(path.Join(pathPrefix, name)),
+			}:
+			}
 		}
 	}
 	return nil

@@ -1,6 +1,7 @@
 with-expecter: true
 dir: "{{.InterfaceDir}}/mocks"
 outpkg: mocks
+issue-845-fix: true
 packages:
   github.com/spiretechnology/go-watchdir/v2:
     interfaces:
