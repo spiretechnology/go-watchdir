@@ -99,7 +99,7 @@ func readDirStats(fsys fs.FS, pathPrefix string) (map[string]fs.FileInfo, error)
 	// Read the directory entries
 	entries, err := fs.ReadDir(fsys, pathPrefix)
 	if err != nil {
-		return nil, fmt.Errorf("error reading directory %q: %w", pathPrefix, err)
+		return nil, fmt.Errorf("readdir: %w", err)
 	}
 
 	// Create a map to hold the file info
@@ -107,7 +107,7 @@ func readDirStats(fsys fs.FS, pathPrefix string) (map[string]fs.FileInfo, error)
 	for _, entry := range entries {
 		info, err := entry.Info()
 		if err != nil {
-			return nil, fmt.Errorf("error getting info for entry %q: %w", entry.Name(), err)
+			return nil, fmt.Errorf("stat entry %q: %w", entry.Name(), err)
 		}
 		fileInfo[entry.Name()] = info
 	}
@@ -124,7 +124,7 @@ func (wd *watcher) sweep(ctx context.Context, fsys fs.FS, chanEvents chan<- Even
 	if wd.dirFilter != nil {
 		include, err := wd.dirFilter.Filter(ctx, wd.prependSubRoot(pathPrefix))
 		if err != nil {
-			return err
+			return fmt.Errorf("filter dir %q: %w", pathPrefix, err)
 		}
 		if !include {
 			return nil
@@ -140,7 +140,7 @@ func (wd *watcher) sweep(ctx context.Context, fsys fs.FS, chanEvents chan<- Even
 	// Read the entries in the directory
 	entries, err := readDirStats(fsys, pathPrefix)
 	if err != nil {
-		return fmt.Errorf("error reading directory %q: %w", pathPrefix, err)
+		return fmt.Errorf("read dir %q: %w", pathPrefix, err)
 	}
 
 	// Delete any file entries that are not yet considered stable (recently modified)
@@ -158,7 +158,7 @@ func (wd *watcher) sweep(ctx context.Context, fsys fs.FS, chanEvents chan<- Even
 			}
 			include, err := wd.fileFilter.Filter(ctx, wd.prependSubRoot(path.Join(pathPrefix, name)))
 			if err != nil {
-				return err
+				return fmt.Errorf("filter file %q: %w", name, err)
 			}
 			if !include {
 				delete(entries, name)
@@ -193,7 +193,7 @@ func (wd *watcher) sweep(ctx context.Context, fsys fs.FS, chanEvents chan<- Even
 		}
 		if prevEntry.IsDir() {
 			if err := wd.sweepDeleted(ctx, fsys, chanEvents, path.Join(pathPrefix, name), cache.children[name]); err != nil {
-				return fmt.Errorf("error sweeping deleted directory %q: %w", path.Join(pathPrefix, name), err)
+				return fmt.Errorf("sweep deleted directory %q: %w", path.Join(pathPrefix, name), err)
 			}
 			delete(cache.children, name)
 		} else if wd.eventsMask&FileRemoved != 0 {
@@ -218,7 +218,7 @@ func (wd *watcher) sweep(ctx context.Context, fsys fs.FS, chanEvents chan<- Even
 
 			// Recursively sweep the child directory, creating the new cache for it
 			if err := wd.sweep(ctx, fsys, chanEvents, depth+1, path.Join(pathPrefix, name), cache.children[name]); err != nil {
-				return fmt.Errorf("error sweeping directory %q: %w", path.Join(pathPrefix, name), err)
+				return fmt.Errorf("sweep directory %q: %w", path.Join(pathPrefix, name), err)
 			}
 		}
 	}
@@ -238,7 +238,7 @@ func (wd *watcher) sweepDeleted(ctx context.Context, fsys fs.FS, chanEvents chan
 	for name, prevEntry := range cache.entries {
 		if prevEntry.IsDir() {
 			if err := wd.sweepDeleted(ctx, fsys, chanEvents, path.Join(pathPrefix, name), cache.children[name]); err != nil {
-				return fmt.Errorf("error sweeping deleted directory %q: %w", path.Join(pathPrefix, name), err)
+				return fmt.Errorf("sweep deleted directory %q: %w", path.Join(pathPrefix, name), err)
 			}
 		} else if wd.eventsMask&FileRemoved != 0 {
 			select {
