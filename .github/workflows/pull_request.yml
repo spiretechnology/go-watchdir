@@ -1,4 +1,4 @@
-name: Pull Request Workflow
+name: Pull Request
 on:
   pull_request:
   workflow_dispatch:
@@ -8,16 +8,14 @@ on:
 jobs:
   checks:
     name: Workspace Checks
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
 
       - name: Checkout
         uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
           go-version-file: 'go.mod'
 
@@ -31,8 +29,50 @@ jobs:
         shell: bash
         run: |
           go mod tidy
-          git status -s
-          if [[ -n $(git status -s) ]]; then exit 1; fi
+          gitclean=$(git status -s)
+          if [[ -n $gitclean ]]; then
+            echo "Go mod tidy generated files that are not committed:"
+            echo "$gitclean"
+            exit 1
+          fi
+
+      - name: Install Mockery
+        shell: bash
+        env:
+          MOCKERY_BIN_URL: https://github.com/vektra/mockery/releases/download/v2.49.0/mockery_2.49.0_Linux_x86_64.tar.gz
+        run: |
+          sudo mkdir -p /usr/local/mockery
+          curl -L $MOCKERY_BIN_URL | sudo tar -xz -C /usr/local/mockery
+          sudo chmod +x /usr/local/mockery
+          sudo ln -s /usr/local/mockery/mockery /usr/local/bin/mockery
+          mockery --version
+
+      - name: Generate Mocks
+        shell: bash
+        run: |
+          mockery
+          gitclean=$(git status -s)
+          if [[ -n $gitclean ]]; then
+            echo "Mockery generated files that are not committed:"
+            echo "$gitclean"
+            exit 1
+          fi
+
+  test:
+    name: Test
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
 
       - name: Go Vet
         shell: bash
@@ -41,3 +81,4 @@ jobs:
       - name: Go Test
         shell: bash
         run: go test -race ./...
+
