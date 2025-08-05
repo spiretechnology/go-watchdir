@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path"
 	"time"
@@ -21,6 +22,7 @@ func New(fsys fs.FS, options ...Option) Watcher {
 		sleepFunc:               nil,
 		maxDepth:                DefaultMaxDepth,
 		writeStabilityThreshold: DefaultWriteStabilityThreshold,
+		logger:                  log.New(os.Stdout, "[watchdir] ", log.LstdFlags),
 		cachedEntries:           make(map[string]map[string]fs.FileInfo),
 	}
 	WithPollInterval(DefaultPollInterval)(wd)
@@ -39,6 +41,7 @@ type watcher struct {
 	sleepFunc               func(context.Context) error
 	maxDepth                uint
 	writeStabilityThreshold time.Duration
+	logger                  *log.Logger
 
 	cachedEntries map[string]map[string]fs.FileInfo
 }
@@ -59,7 +62,7 @@ func (wd *watcher) Watch(ctx context.Context, handler Handler) error {
 
 			// Other errors should not cause the watch process to end, so we just
 			// log them and continue
-			fmt.Printf("watchdir: sweep error: %s\n", err)
+			wd.logger.Printf("sweep error: %+v", err)
 		}
 
 		// Sleep until the next sweep
@@ -114,7 +117,7 @@ func (wd *watcher) Sweep(ctx context.Context, handler Handler) error {
 				return nil
 			}
 			if err := handler.WatchEvent(ctx, event); err != nil {
-				fmt.Printf("watchdir: handler error: %s\n", err)
+				wd.logger.Printf("handler error: %+v", err)
 			}
 		}
 	})
@@ -159,7 +162,7 @@ func (wd *watcher) sweep(ctx context.Context, fsys fs.FS, chanEvents chan<- Even
 
 	// Return if the depth is too deep
 	if depth >= wd.maxDepth {
-		fmt.Println("watchdir: hit max depth")
+		wd.logger.Printf("hit max depth %d", depth)
 		return nil
 	}
 

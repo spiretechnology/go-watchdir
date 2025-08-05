@@ -2,6 +2,7 @@ package watchdir
 
 import (
 	"context"
+	"log"
 	"time"
 )
 
@@ -65,5 +66,11 @@ func WithExcludeDirs(dirs ...string) Option {
 func WithSubRoot(root string) Option {
 	return func(wd *watcher) {
 		wd.subRoot = normalizePath(root)
+	}
+}
+
+func WithLogger(logger *log.Logger) Option {
+	return func(wd *watcher) {
+		wd.logger = logger
 	}
 }
