@@ -8,26 +8,36 @@ on:
 jobs:
   checks:
     name: Workspace Checks
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
 
-    - name: Checkout
-      uses: actions/checkout@v2
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - uses: actions/setup-go@v2
-      with:
-        go-version: '1.20'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
 
-    - name: Lint
-      run: if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then exit 1; fi
+      - name: Go Lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.60
+          args: --timeout=10m
 
-    - name: Tidy
-      run: |
-        go mod tidy
-        if [[ -n $(git status -s) ]]; then exit 1; fi
+      - name: Go Tidy
+        shell: bash
+        run: |
+          go mod tidy
+          git status -s
+          if [[ -n $(git status -s) ]]; then exit 1; fi
 
-    - name: Vet
-      run: go vet ./...
+      - name: Go Vet
+        shell: bash
+        run: go vet ./...
 
-    - name: Test
-      run: go test ./...
+      - name: Go Test
+        shell: bash
+        run: go test -race ./...
