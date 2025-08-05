@@ -8,6 +8,8 @@ import (
 	"os"
 	"path"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 func New(fsys fs.FS, options ...Option) Watcher {
@@ -89,8 +91,34 @@ func (wd *watcher) Sweep(ctx context.Context, handler Handler) error {
 		return err
 	}
 
-	// Sweep the fsys recursively
-	return wd.sweep(ctx, fsys, handler, 0, ".")
+	eg, ctx := errgroup.WithContext(ctx)
+
+	// In one goroutine, sweep the directory and send events to the channel
+	chanEvents := make(chan Event)
+	eg.Go(func() error {
+		defer close(chanEvents)
+		return wd.sweep(ctx, fsys, chanEvents, 0, ".")
+	})
+
+	// In another goroutine, read from the channel and call the handler
+	eg.Go(func() error {
+		for {
+			var event Event
+			var ok bool
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case event, ok = <-chanEvents:
+			}
+			if !ok {
+				return nil
+			}
+			if err := handler.WatchEvent(ctx, event); err != nil {
+				fmt.Printf("watchdir: handler error: %s\n", err)
+			}
+		}
+	})
+	return eg.Wait()
 }
 
 func readDirStats(fsys fs.FS, pathPrefix string) (map[string]fs.FileInfo, error) {
@@ -112,7 +140,7 @@ func readDirStats(fsys fs.FS, pathPrefix string) (map[string]fs.FileInfo, error)
 	return fileInfo, nil
 }
 
-func (wd *watcher) sweep(ctx context.Context, fsys fs.FS, handler Handler, depth uint, pathPrefix string) error {
+func (wd *watcher) sweep(ctx context.Context, fsys fs.FS, chanEvents chan<- Event, depth uint, pathPrefix string) error {
 	// Breakout if the context is cancelled.
 	if err := ctx.Err(); err != nil {
 		return err
@@ -170,11 +198,13 @@ func (wd *watcher) sweep(ctx context.Context, fsys fs.FS, handler Handler, depth
 					continue
 				}
 			}
-			if err := handler.WatchEvent(ctx, Event{
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case chanEvents <- Event{
 				Type: FileAdded,
 				File: wd.prependSubRoot(path.Join(pathPrefix, name)),
-			}); err != nil {
-				return err
+			}:
 			}
 		}
 	}
@@ -186,15 +216,17 @@ func (wd *watcher) sweep(ctx context.Context, fsys fs.FS, handler Handler, depth
 				continue
 			}
 			if prevEntry.IsDir() {
-				if err := wd.sweepDeleted(ctx, fsys, handler, path.Join(pathPrefix, name)); err != nil {
+				if err := wd.sweepDeleted(ctx, fsys, chanEvents, path.Join(pathPrefix, name)); err != nil {
 					return fmt.Errorf("error sweeping deleted directory %q: %w", path.Join(pathPrefix, name), err)
 				}
 			} else {
-				if err := handler.WatchEvent(ctx, Event{
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case chanEvents <- Event{
 					Type: FileRemoved,
 					File: wd.prependSubRoot(path.Join(pathPrefix, name)),
-				}); err != nil {
-					return err
+				}:
 				}
 			}
 		}
@@ -203,7 +235,7 @@ func (wd *watcher) sweep(ctx context.Context, fsys fs.FS, handler Handler, depth
 	// Sweep all child directories
 	for name, entry := range entries {
 		if entry.IsDir() {
-			if err := wd.sweep(ctx, fsys, handler, depth+1, path.Join(pathPrefix, name)); err != nil {
+			if err := wd.sweep(ctx, fsys, chanEvents, depth+1, path.Join(pathPrefix, name)); err != nil {
 				return err
 			}
 		}
@@ -214,7 +246,7 @@ func (wd *watcher) sweep(ctx context.Context, fsys fs.FS, handler Handler, depth
 	return nil
 }
 
-func (wd *watcher) sweepDeleted(ctx context.Context, fsys fs.FS, handler Handler, pathPrefix string) error {
+func (wd *watcher) sweepDeleted(ctx context.Context, fsys fs.FS, chanEvents chan<- Event, pathPrefix string) error {
 	// Get the previous sweep data for this directory
 	prevEntries := wd.cachedEntries[pathPrefix]
 	if prevEntries == nil {
@@ -224,15 +256,17 @@ func (wd *watcher) sweepDeleted(ctx context.Context, fsys fs.FS, handler Handler
 	// Loop over all of the entries that were previously cached
 	for name, prevEntry := range prevEntries {
 		if prevEntry.IsDir() {
-			if err := wd.sweepDeleted(ctx, fsys, handler, path.Join(pathPrefix, name)); err != nil {
+			if err := wd.sweepDeleted(ctx, fsys, chanEvents, path.Join(pathPrefix, name)); err != nil {
 				return fmt.Errorf("error sweeping deleted directory %q: %w", path.Join(pathPrefix, name), err)
 			}
 		} else if wd.eventsMask&FileRemoved != 0 {
-			if err := handler.WatchEvent(ctx, Event{
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case chanEvents <- Event{
 				Type: FileRemoved,
 				File: wd.prependSubRoot(path.Join(pathPrefix, name)),
-			}); err != nil {
-				return err
+			}:
 			}
 		}
 	}
