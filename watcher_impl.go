@@ -9,6 +9,8 @@ import (
 	"os"
 	"path"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 func New(fsys fs.FS, options ...Option) Watcher {
@@ -208,23 +210,39 @@ func (wd *watcher) sweep(ctx context.Context, fsys fs.FS, chanEvents chan<- Even
 		}
 	}
 
-	// Sweep all child directories
+	// Update the cache with the current entries
+	cache.entries = entries
+
+	eg, ctx := errgroup.WithContext(ctx)
+
+	// Quickly update the children map to ensure it has entries for all current directories
+	// This cannot be done concurrently due to map access
 	for name, entry := range entries {
 		if entry.IsDir() {
 			// Create the child cache if it doesn't exist
 			if cache.children[name] == nil {
 				cache.children[name] = newDirCache()
 			}
-
-			// Recursively sweep the child directory, creating the new cache for it
-			if err := wd.sweep(ctx, fsys, chanEvents, depth+1, path.Join(pathPrefix, name), cache.children[name]); err != nil {
-				return fmt.Errorf("sweep directory %q: %w", path.Join(pathPrefix, name), err)
-			}
 		}
 	}
 
-	// Update the cache with the current entries
-	cache.entries = entries
+	// Sweep all child directories
+	for name, entry := range entries {
+		if entry.IsDir() {
+			eg.Go(func() error {
+				// Recursively sweep the child directory, creating the new cache for it
+				if err := wd.sweep(ctx, fsys, chanEvents, depth+1, path.Join(pathPrefix, name), cache.children[name]); err != nil {
+					return fmt.Errorf("sweep directory %q: %w", path.Join(pathPrefix, name), err)
+				}
+				return nil
+			})
+		}
+	}
+
+	// Wait for all of the goroutines to complete
+	if err := eg.Wait(); err != nil {
+		return fmt.Errorf("wait for sweep goroutines: %w", err)
+	}
 	return nil
 }
 
