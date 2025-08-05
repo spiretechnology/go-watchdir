@@ -9,8 +9,6 @@ import (
 	"os"
 	"path"
 	"time"
-
-	"golang.org/x/sync/errgroup"
 )
 
 func New(fsys fs.FS, options ...Option) Watcher {
@@ -19,13 +17,11 @@ func New(fsys fs.FS, options ...Option) Watcher {
 		eventsMask:              AllEvents,
 		fileFilter:              nil,
 		dirFilter:               nil,
-		sleepFunc:               nil,
 		maxDepth:                DefaultMaxDepth,
 		writeStabilityThreshold: DefaultWriteStabilityThreshold,
 		logger:                  log.New(os.Stdout, "[watchdir] ", log.LstdFlags),
 		cachedEntries:           make(map[string]map[string]fs.FileInfo),
 	}
-	WithPollInterval(DefaultPollInterval)(wd)
 	for _, option := range options {
 		option(wd)
 	}
@@ -38,7 +34,6 @@ type watcher struct {
 	eventsMask              EventType
 	fileFilter              Filter
 	dirFilter               Filter
-	sleepFunc               func(context.Context) error
 	maxDepth                uint
 	writeStabilityThreshold time.Duration
 	logger                  *log.Logger
@@ -46,33 +41,12 @@ type watcher struct {
 	cachedEntries map[string]map[string]fs.FileInfo
 }
 
-func (wd *watcher) Watch(ctx context.Context, handler Handler) error {
-	if wd.fsys == nil {
-		return errors.New("cannot watch nil file system")
-	}
-
-	// Loop until we're told to stop
-	for {
-		// Perform the sweep iteration
-		if err := wd.Sweep(ctx, handler); err != nil {
-			// If the context was cancelled, return that error
-			if errors.Is(err, context.Canceled) {
-				return err
-			}
-
-			// Other errors should not cause the watch process to end, so we just
-			// log them and continue
-			wd.logger.Printf("sweep error: %+v", err)
-		}
-
-		// Sleep until the next sweep
-		if err := wd.sleepFunc(ctx); err != nil {
-			return err
-		}
-	}
-}
-
 func (wd *watcher) getSweepFS() (fs.FS, error) {
+	// If there is no file system, return an error
+	if wd.fsys == nil {
+		return nil, errors.New("cannot watch nil file system")
+	}
+
 	// If there is no sub-root configured, use the root fs
 	if wd.subRoot == "" {
 		return wd.fsys, nil
@@ -87,41 +61,26 @@ func (wd *watcher) getSweepFS() (fs.FS, error) {
 	return fs.Sub(wd.fsys, wd.subRoot)
 }
 
-func (wd *watcher) Sweep(ctx context.Context, handler Handler) error {
+func (wd *watcher) Sweep(ctx context.Context, chanEvents chan<- Event) (reterr error) {
+	startTime := time.Now()
+	wd.logger.Println("sweep started")
+	defer func() {
+		duration := time.Since(startTime)
+		if reterr != nil {
+			wd.logger.Printf("sweep took %s, returned error: %+v", duration, reterr)
+		} else {
+			wd.logger.Printf("sweep took %s, completed successfully", duration)
+		}
+	}()
+
 	// Get the fsys for the sweep, which can be a sub-fs
 	fsys, err := wd.getSweepFS()
 	if err != nil {
 		return err
 	}
 
-	eg, ctx := errgroup.WithContext(ctx)
-
-	// In one goroutine, sweep the directory and send events to the channel
-	chanEvents := make(chan Event)
-	eg.Go(func() error {
-		defer close(chanEvents)
-		return wd.sweep(ctx, fsys, chanEvents, 0, ".")
-	})
-
-	// In another goroutine, read from the channel and call the handler
-	eg.Go(func() error {
-		for {
-			var event Event
-			var ok bool
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case event, ok = <-chanEvents:
-			}
-			if !ok {
-				return nil
-			}
-			if err := handler.WatchEvent(ctx, event); err != nil {
-				wd.logger.Printf("handler error: %+v", err)
-			}
-		}
-	})
-	return eg.Wait()
+	// Sweep the file system recursively
+	return wd.sweep(ctx, fsys, chanEvents, 0, ".")
 }
 
 func readDirStats(fsys fs.FS, pathPrefix string) (map[string]fs.FileInfo, error) {

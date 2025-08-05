@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/spiretechnology/go-watchdir/v2"
+	"golang.org/x/sync/errgroup"
 )
 
 func main() {
@@ -27,7 +28,6 @@ func main() {
 
 	wd := watchdir.New(
 		os.DirFS(dir),
-		watchdir.WithPollInterval(0),
 		watchdir.WithWriteStabilityThreshold(time.Second),
 		watchdir.WithFileFilter(watchdir.FilterFunc(func(ctx context.Context, filename string) (bool, error) {
 			if strings.HasPrefix(path.Base(filename), ".") {
@@ -36,16 +36,32 @@ func main() {
 			return true, nil
 		})),
 	)
-	err := wd.Watch(ctx, watchdir.HandlerFunc(func(ctx context.Context, event watchdir.Event) error {
-		switch event.Type {
-		case watchdir.FileAdded:
-			log.Printf("[+] %s\n", event.File)
-		case watchdir.FileRemoved:
-			log.Printf("[-] %s\n", event.File)
+	eg, ctx := errgroup.WithContext(ctx)
+
+	chanEvents := make(chan watchdir.Event)
+	eg.Go(func() error {
+		defer close(chanEvents)
+		return watchdir.Watch(ctx, wd, 0, chanEvents)
+	})
+	eg.Go(func() error {
+		for {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case event, ok := <-chanEvents:
+				if !ok {
+					return nil // Channel closed
+				}
+				switch event.Type {
+				case watchdir.FileAdded:
+					log.Printf("[+] %s\n", event.File)
+				case watchdir.FileRemoved:
+					log.Printf("[-] %s\n", event.File)
+				}
+			}
 		}
-		return nil
-	}))
-	if err != nil {
+	})
+	if err := eg.Wait(); err != nil {
 		log.Fatal(err)
 	}
 }

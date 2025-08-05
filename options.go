@@ -14,19 +14,6 @@ func WithEvents(mask EventType) Option {
 	}
 }
 
-func WithPollInterval(interval time.Duration) Option {
-	return func(wd *watcher) {
-		wd.sleepFunc = func(ctx context.Context) error {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(interval):
-			}
-			return nil
-		}
-	}
-}
-
 func WithMaxDepth(maxDepth uint) Option {
 	return func(wd *watcher) {
 		wd.maxDepth = maxDepth
