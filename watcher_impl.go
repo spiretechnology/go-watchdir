@@ -143,9 +143,9 @@ func (wd *watcher) sweep(ctx context.Context, fsys fs.FS, chanEvents chan<- Even
 		return fmt.Errorf("error reading directory %q: %w", pathPrefix, err)
 	}
 
-	// Delete any entries that are not yet considered stable (recently modified)
+	// Delete any file entries that are not yet considered stable (recently modified)
 	for name, entry := range entries {
-		if entry.ModTime().Add(wd.writeStabilityThreshold).After(time.Now()) {
+		if !entry.IsDir() && entry.ModTime().Add(wd.writeStabilityThreshold).After(time.Now()) {
 			delete(entries, name)
 		}
 	}
