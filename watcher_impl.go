@@ -31,13 +31,13 @@ func New(fsys fs.FS, options ...Option) Watcher {
 }
 
 type dirCache struct {
-	entries  map[string]fs.FileInfo
+	entries  map[string]fs.DirEntry
 	children map[string]*dirCache
 }
 
 func newDirCache() *dirCache {
 	return &dirCache{
-		entries:  make(map[string]fs.FileInfo),
+		entries:  make(map[string]fs.DirEntry),
 		children: make(map[string]*dirCache),
 	}
 }
@@ -97,23 +97,19 @@ func (wd *watcher) Sweep(ctx context.Context, chanEvents chan<- Event) (reterr e
 	return wd.sweep(ctx, fsys, chanEvents, 0, ".", wd.cache)
 }
 
-func readDirStats(fsys fs.FS, pathPrefix string) (map[string]fs.FileInfo, error) {
+func readDir(fsys fs.FS, pathPrefix string) (map[string]fs.DirEntry, error) {
 	// Read the directory entries
 	entries, err := fs.ReadDir(fsys, pathPrefix)
 	if err != nil {
 		return nil, fmt.Errorf("readdir: %w", err)
 	}
 
-	// Create a map to hold the file info
-	fileInfo := make(map[string]fs.FileInfo)
+	// Convert it to a map for easier lookups
+	entriesMap := make(map[string]fs.DirEntry, len(entries))
 	for _, entry := range entries {
-		info, err := entry.Info()
-		if err != nil {
-			return nil, fmt.Errorf("stat entry %q: %w", entry.Name(), err)
-		}
-		fileInfo[entry.Name()] = info
+		entriesMap[entry.Name()] = entry
 	}
-	return fileInfo, nil
+	return entriesMap, nil
 }
 
 func (wd *watcher) sweep(ctx context.Context, fsys fs.FS, chanEvents chan<- Event, depth uint, pathPrefix string, cache *dirCache) error {
@@ -140,16 +136,9 @@ func (wd *watcher) sweep(ctx context.Context, fsys fs.FS, chanEvents chan<- Even
 	}
 
 	// Read the entries in the directory
-	entries, err := readDirStats(fsys, pathPrefix)
+	entries, err := readDir(fsys, pathPrefix)
 	if err != nil {
 		return fmt.Errorf("read dir %q: %w", pathPrefix, err)
-	}
-
-	// Delete any file entries that are not yet considered stable (recently modified)
-	for name, entry := range entries {
-		if !entry.IsDir() && entry.ModTime().Add(wd.writeStabilityThreshold).After(time.Now()) {
-			delete(entries, name)
-		}
 	}
 
 	// Remove any file entries that are excluded by the file filter
@@ -169,14 +158,38 @@ func (wd *watcher) sweep(ctx context.Context, fsys fs.FS, chanEvents chan<- Even
 	}
 
 	// Find entries that are newly added (didn't previously exist)
-	if wd.eventsMask&FileAdded != 0 {
-		for name, entry := range entries {
-			if entry.IsDir() {
+	for name, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		// If the file already exists in the cache, skip it
+		if cache.entries[name] != nil {
+			continue
+		}
+		// Ignore the file if it doesn't pass the file filter
+		if wd.fileFilter != nil {
+			include, err := wd.fileFilter.Filter(ctx, wd.prependSubRoot(path.Join(pathPrefix, name)))
+			if err != nil {
+				return fmt.Errorf("filter file %q: %w", name, err)
+			}
+			if !include {
+				delete(entries, name)
 				continue
 			}
-			if cache.entries[name] != nil {
+		}
+		// Ignore the file if it fails the write stability threshold
+		if wd.writeStabilityThreshold > 0 {
+			stat, err := entry.Info()
+			if err != nil {
+				return fmt.Errorf("stat entry %q: %w", name, err)
+			}
+			if stat.ModTime().Add(wd.writeStabilityThreshold).After(time.Now()) {
+				delete(entries, name)
 				continue
 			}
+		}
+		// If the file is new, send an event
+		if wd.eventsMask&FileAdded != 0 {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
