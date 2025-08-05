@@ -141,22 +141,6 @@ func (wd *watcher) sweep(ctx context.Context, fsys fs.FS, chanEvents chan<- Even
 		return fmt.Errorf("read dir %q: %w", pathPrefix, err)
 	}
 
-	// Remove any file entries that are excluded by the file filter
-	if wd.fileFilter != nil {
-		for name, entry := range entries {
-			if entry.IsDir() {
-				continue
-			}
-			include, err := wd.fileFilter.Filter(ctx, wd.prependSubRoot(path.Join(pathPrefix, name)))
-			if err != nil {
-				return fmt.Errorf("filter file %q: %w", name, err)
-			}
-			if !include {
-				delete(entries, name)
-			}
-		}
-	}
-
 	// Find entries that are newly added (didn't previously exist)
 	for name, entry := range entries {
 		if entry.IsDir() {
