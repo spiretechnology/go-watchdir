@@ -209,7 +209,7 @@ func (wd *watcher) sweep(ctx context.Context, fsys fs.FS, chanEvents chan<- Even
 	// Update the cache with the current entries
 	cache.entries = entries
 
-	eg, ctx := errgroup.WithContext(ctx)
+	var eg errgroup.Group
 
 	// Quickly update the children map to ensure it has entries for all current directories
 	// This cannot be done concurrently due to map access
