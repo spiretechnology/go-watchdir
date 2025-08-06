@@ -157,7 +157,6 @@ func (wd *watcher) sweep(ctx context.Context, fsys fs.FS, chanEvents chan<- Even
 				return fmt.Errorf("filter file %q: %w", name, err)
 			}
 			if !include {
-				delete(entries, name)
 				continue
 			}
 		}
